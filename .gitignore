@@ -1,0 +1,9 @@
+*.log
+*.swp
+*.zip
+.vscode
+__pycache__
+configuration.json
+lib
+venv_*
+
