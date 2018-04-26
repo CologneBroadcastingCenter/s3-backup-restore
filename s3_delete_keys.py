@@ -29,6 +29,7 @@ def get_s3_objects(session, bucket):
             keys.append(key.key)
     except:
         logger.exception("")
+        sys.exit(127)
     else:
         return keys
 
