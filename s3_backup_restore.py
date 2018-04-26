@@ -25,12 +25,22 @@ parser.add_argument('--verbose', '-v', action='count')
 parser.add_argument('--dry-run', action='store_true', help='Simulate what will happen.')
 cmd_args = parser.parse_args()
 
-if cmd_args.verbose and cmd_args.verbose > 0:
+PROFILE = cmd_args.profile
+SOURCE_BUCKET = cmd_args.source_bucket
+DESTINATION_BUCKET = cmd_args.destination_bucket
+PREFIX = cmd_args.prefix
+TAG_DELETED = cmd_args.tag_deleted
+THREAD_COUNT = cmd_args.thread_count
+VERBOSE = cmd_args.verbose
+DRY_RUN = cmd_args.dry_run
+
+
+if VERBOSE and VERBOSE > 0:
     logger.setLevel(logging.DEBUG)
 
 
 class S3GetDifferentKeys(threading.Thread):
-
+    pass
 
 
 class S3BackupRestore(threading.Thread):
@@ -63,29 +73,17 @@ class S3BackupRestore(threading.Thread):
                 logger.error("To many connections open.")
 
 
-def get_s3_keys(s3_client, bucket, prefix=''):
-    kwargs = {'Bucket': bucket, 'Prefix': prefix}
+def get_s3_keys(aws_session, bucket):
     keys = list()
 
-    while True:
-        # The S3 API response is a blob of metadata.
-        # 'Contents' contains information about the listed objects.
-        resp = s3_client.list_objects_v2(**kwargs)
-        try:
-            for key in resp['Contents']:
-                keys.append(key['Key'])
-        except KeyError as exc:
-            logger.error("No content in bucket {}.".format(bucket))
-            return keys
-        else:
-            # The S3 API is paginated, returning up to 1000 keys at a time.
-            # Pass the continuation token into the next response, until we
-            # reach the final page
-            try:
-                kwargs['ContinuationToken'] = resp['NextContinuationToken']
-            except KeyError:
-                return keys
-                break
+    try:
+        for key in aws_session.resource('s3').Bucket(bucket).objects.all():
+            keys.append(key.key)
+    except:
+        logger.exception("")
+        sys.exit(127)
+    else:
+        return keys
 
 
 def tag_deleted_keys(s3_client, backup_bucket, keys_to_tag):
@@ -139,8 +137,8 @@ def tag_deleted_keys(s3_client, backup_bucket, keys_to_tag):
 
 if __name__ == '__main__':
     try:
-        if cmd_args.profile:
-            aws_session = boto3.session.Session(profile_name=cmd_args.profile)
+        if PROFILE:
+            aws_session = boto3.session.Session(profile_name=PROFILE)
         else:
             aws_session = boto3.session.Session()
         s3_client = aws_session.client('s3')
@@ -149,35 +147,35 @@ if __name__ == '__main__':
         sys.exit(127)
     else:
         # Getting S3 keys from source bucket
-        logging.info("List S3 Keys from {}".format(cmd_args.source_bucket))
-        source_bucket_keys = get_s3_keys(s3_client, cmd_args.source_bucket, cmd_args.prefix)
-        logger.debug("Keys from {} bucket:\n{}".format(cmd_args.source_bucket, source_bucket_keys))
+        logger.info("List S3 Keys from {}".format(SOURCE_BUCKET))
+        source_bucket_keys = get_s3_keys(aws_session, SOURCE_BUCKET)
+        logger.info("Number of keys in {}: {}".format(SOURCE_BUCKET, len(source_bucket_keys)))
 
         # Getting S3 keys from source bucket
-        logging.info("List S3 Keys from {}".format(cmd_args.destination_bucket))
-        dest_bucket_keys = get_s3_keys(s3_client, cmd_args.destination_bucket, cmd_args.prefix)
-        logger.debug("Keys from {} bucket:\n{}".format(cmd_args.destination_bucket, dest_bucket_keys))
-
+        logger.info("List S3 Keys from {}".format(DESTINATION_BUCKET))
+        dest_bucket_keys = get_s3_keys(aws_session, DESTINATION_BUCKET)
+        logger.info("Number of keys in {}: {}".format(DESTINATION_BUCKET, len(dest_bucket_keys)))
+        sys.exit(127)
         # Adding source bucket keys to queue to make it thread safe
         for key in source_bucket_keys:
             copy_queue.put(key)
 
         th = list()
-        logger.info("Generating {} threads.".format(cmd_args.thread_count))
+        logger.info("Generating {} threads.".format(THREAD_COUNT))
         for i in range(0, cmd_args.thread_count):
-            th.append(S3BackupRestore(i, aws_session, cmd_args.source_bucket, cmd_args.destination_bucket))
+            th.append(S3BackupRestore(i, aws_session, SOURCE_BUCKET, DESTINATION_BUCKET))
             th[i].daemon = True
             th[i].start()
         copy_queue.join()
 
-        for i in range(0, cmd_args.thread_count):
+        for i in range(0, THREAD_COUNT):
             th[i].join()
 
         # If script will be calle with flag --tag-deleted we will tag all newly deleted files
         # from source bucket as deleted in backup bucket
-        if cmd_args.tag_deleted:
+        if TAG_DELETED:
             try:
                 deleted_keys = set(dest_bucket_keys) - set(source_bucket_keys)
-                tag_deleted_keys(s3_client, cmd_args.destination_bucket, deleted_keys)
+                tag_deleted_keys(s3_client, DESTINATION_BUCKET, deleted_keys)
             except:
                 logger.exception("")
