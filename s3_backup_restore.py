@@ -9,6 +9,7 @@ from datetime import datetime
 
 copy_queue = queue.Queue()
 speed_queue = queue.Queue()
+comparison_queue = queue.Queue()
 
 logging.basicConfig(
     level=logging.ERROR,
@@ -37,12 +38,10 @@ VERBOSE = cmd_args.verbose
 DRY_RUN = cmd_args.dry_run
 
 
-if VERBOSE and VERBOSE > 0:
+if VERBOSE and VERBOSE == 1:
+    logger.setLevel(logging.INFO)
+elif VERBOSE and VERBOSE == 2:
     logger.setLevel(logging.DEBUG)
-
-
-class S3GetDifferentKeys(threading.Thread):
-    pass
 
 
 class S3BackupRestore(threading.Thread):
@@ -55,25 +54,15 @@ class S3BackupRestore(threading.Thread):
 
     def run(self):
         global copy_queue
-        global speed_queue
         self.s3 = self.aws_session.resource('s3')
 
         while not copy_queue.empty():
             self.key = copy_queue.get()
-            content_length = 0
-            try:
-                # Receiving content_length ob Object in Bucket
-                self.source_obj = self.s3.Object(self.source_bucket, self.key)
-                content_length = self.source_obj.content_length
-            except:
-                logger.debug('Content_length not available. Setting to 0.')
 
             # Preparing copy task
             self.dest_obj = self.s3.Object(self.destination_bucket, self.key)
             logger.info("Thread number {} copying key: {}".format(self.thread_number, self.key))
             try:
-                start = time.time()
-
                 self.dest_obj.copy(
                     {
                         'Bucket': self.source_bucket,
@@ -81,14 +70,11 @@ class S3BackupRestore(threading.Thread):
                     }
                 )
                 copy_queue.task_done()
-                stop = time.time()
             except ConnectionRefusedError as exc:
                 logger.error("To many connections open.")
             except:
                 logger.exception("")
                 break
-            else:
-                speed_queue.put((content_length, float(stop - start)))
 
 
 def get_s3_keys(aws_session, bucket):
@@ -97,11 +83,51 @@ def get_s3_keys(aws_session, bucket):
     try:
         for key in aws_session.resource('s3').Bucket(bucket).objects.all():
             keys.append(key.key)
+    except KeyboardInterrupt:
+        print("Exiting...")
+        sys.exit(127)
     except:
         logger.exception("")
         sys.exit(127)
     else:
         return keys
+
+
+class CompareKeysClAndETag(threading.Thread):
+
+    def __init__(self, thread_number, aws_session, source_bucket, dest_bucket):
+        threading.Thread.__init__(self)
+        self.thread_number = thread_number
+        self.aws_session = aws_session
+        self.source_bucket = source_bucket
+        self.dest_bucket = dest_bucket
+
+    def run(self):
+        global copy_queue
+        global comparison_queue
+        try:
+            s3 = self.aws_session.resource('s3')
+        except:
+            logger.exception("")
+        while not comparison_queue.empty():
+            self.key = comparison_queue.get()
+
+            try:
+                source_cl = s3.Object(self.source_bucket, self.key).content_length
+                source_etag = s3.Object(self.source_bucket, self.key).e_tag
+
+                dest_cl = s3.Object(self.dest_bucket, self.key).content_length
+                dest_etag = s3.Object(self.dest_bucket, self.key).e_tag
+            except ConnectionRefusedError as exc:
+                logger.error("To many connections open.")
+            except:
+                logger.exception("")
+                break
+            else:
+                if source_cl != dest_cl or source_etag != dest_etag:
+                    print("Adding {} to queue".format(key))
+                    copy_queue.put(key)
+                comparison_queue.task_done()
 
 
 def tag_deleted_keys(aws_session, backup_bucket, keys_to_tag):
@@ -157,54 +183,124 @@ if __name__ == '__main__':
             aws_session = boto3.session.Session(profile_name=PROFILE)
         else:
             aws_session = boto3.session.Session()
-        s3_client = aws_session.client('s3')
     except:
         logger.exception("")
         sys.exit(127)
     else:
         # Getting S3 keys from source bucket
-        logger.info("List S3 Keys from {}".format(SOURCE_BUCKET))
+        logger.debug("List S3 Keys from {}".format(SOURCE_BUCKET))
         source_bucket_keys = get_s3_keys(aws_session, SOURCE_BUCKET)
         logger.info("Number of keys in {}: {}".format(SOURCE_BUCKET, len(source_bucket_keys)))
 
         # Getting S3 keys from source bucket
-        logger.info("List S3 Keys from {}".format(DESTINATION_BUCKET))
+        logger.debug("List S3 Keys from {}".format(DESTINATION_BUCKET))
         dest_bucket_keys = get_s3_keys(aws_session, DESTINATION_BUCKET)
         logger.info("Number of keys in {}: {}".format(DESTINATION_BUCKET, len(dest_bucket_keys)))
 
-        # Adding source bucket keys to queue to make it thread safe
-        for key in source_bucket_keys:
-            copy_queue.put(key)
+        # Sending keys to queue if they are not in Destination Bucket
+        keys_not_in_dest_bucket = set(source_bucket_keys) - set(dest_bucket_keys)
+        [copy_queue.put(key) for key in keys_not_in_dest_bucket]
+        logger.info("{} key(s) not in destination Bucket.".format(len(keys_not_in_dest_bucket)))
+        logger.debug("Keys not in destination Bucket: {}".format(keys_not_in_dest_bucket))
+        logger.info("Copy queue size: {}".format(copy_queue.qsize()))
 
+        # Check all keys existing in destination bucket and source bucket
+        keys_to_check = set(source_bucket_keys) & set(dest_bucket_keys)
+        [comparison_queue.put(key) for key in keys_to_check]
+        logger.info("{} keys to check for equality.".format(len(keys_to_check)))
+        logger.debug("Keys not in destination Bucket: {}".format(keys_to_check))
+
+        # Start equality check of objects in S3
+        # Puting objects not equal into copy_queue
         th = list()
-        logger.info("Generating {} threads.".format(THREAD_COUNT))
+        logger.info("Generating {} comparison threads.".format(THREAD_COUNT))
         for thread_num in range(0, THREAD_COUNT):
-            th.append(S3BackupRestore(thread_num, aws_session, SOURCE_BUCKET, DESTINATION_BUCKET))
+            th.append(CompareKeysClAndETag(thread_num, aws_session, SOURCE_BUCKET, DESTINATION_BUCKET))
             th[thread_num].daemon = True
             th[thread_num].start()
-        logger.debug("Waiting for queue to be finished.")
-        copy_queue.join()
-        logger.debug("Queue finished.")
+
+        logger.info("Waiting for comparison queue to be finished.")
+        try:
+            while True:
+                if not comparison_queue.empty():
+                    time.sleep(500/1000)
+                else:
+                    break
+        except KeyboardInterrupt:
+            print("Exiting...")
+            sys.exit(127)
+        else:
+            comparison_queue.join()
+            logger.info("Comparison queue finished.")
 
         for i in range(0, THREAD_COUNT):
-            logger.debug("Waiting for thread number {} to be finished.".format(i))
-            th[i].join()
-            logger.debug("Thread number {} finished.".format(i))
+            logger.info("Waiting for comparison thread {} to be finished.".format(i))
+            try:
+                while True:
+                    if th[i].is_alive():
+                        time.sleep(500/1000)
+                    else:
+                        break
+            except KeyboardInterrupt:
+                print("Exiting...")
+                sys.exit(127)
+            else:
+                th[i].join()
+                logger.info("Comparison thread {} finished.".format(i))
+
+        input("Any key to proceed...")
+        # Check if there are any objects to copy.
+        copy_queue_size = copy_queue.qsize()
+        if copy_queue_size > 0:
+            # Check if copy_queue_size is less than THREAD_COUNT
+            # If so set THREAD_COUNT to copy_queue_size
+            if copy_queue_size < THREAD_COUNT:
+                THREAD_COUNT = copy_queue_size
+
+            # Start copying S3 objects to destiantion bucket
+            # Consume copy_queue until it is empty
+            th = list()
+            logger.info("Generating {} copy threads.".format(THREAD_COUNT))
+            for thread_num in range(0, THREAD_COUNT):
+                th.append(S3BackupRestore(thread_num, aws_session, SOURCE_BUCKET, DESTINATION_BUCKET))
+                th[thread_num].daemon = True
+                th[thread_num].start()
+            logger.info("Waiting for copy queue to be finished.")
+            try:
+                while True:
+                    if not copy_queue.empty():
+                        time.sleep(500/1000)
+                    else:
+                        break
+            except KeyboardInterrupt:
+                print("Exiting...")
+                sys.exit(127)
+            else:
+                copy_queue.join()
+                logger.info("Copy queue finished.")
+
+            for i in range(0, THREAD_COUNT):
+                logger.info("Waiting for copy thread {} to be finished.".format(i))
+                try:
+                    while True:
+                        if th[i].is_alive():
+                            time.sleep(500/1000)
+                        else:
+                            break
+                except KeyboardInterrupt:
+                    print("Exiting...")
+                    sys.exit(127)
+                else:
+                    th[i].join()
+                    logger.info("Copy thread number {} finished.".format(i))
+        else:
+            logger.info("No objects to copy!")
 
         # If script will be calle with flag --tag-deleted we will tag all newly deleted files
         # from source bucket as deleted in backup bucket
         if TAG_DELETED:
             try:
                 deleted_keys = set(dest_bucket_keys) - set(source_bucket_keys)
-                tag_deleted_keys(s3_client, DESTINATION_BUCKET, deleted_keys)
+                tag_deleted_keys(aws_session, DESTINATION_BUCKET, deleted_keys)
             except:
                 logger.exception("")
-
-        byte = 0
-        time = 0
-        while not speed_queue.empty():
-            obj = speed_queue.get()
-            byte += obj[0]
-            time += obj[1]
-        print("Transmissioned Bytes: {:.2f}".format(byte))
-        print("Total time s: {}".format(time))
