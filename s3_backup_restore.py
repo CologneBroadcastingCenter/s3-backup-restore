@@ -4,9 +4,11 @@ import logging
 import queue
 import sys
 import threading
+import time
 from datetime import datetime
 
 copy_queue = queue.Queue()
+speed_queue = queue.Queue()
 
 logging.basicConfig(
     level=logging.ERROR,
@@ -53,15 +55,25 @@ class S3BackupRestore(threading.Thread):
 
     def run(self):
         global copy_queue
-        self.resource = self.aws_session.resource('s3')
-        self.dest_bucket = self.resource.Bucket(self.destination_bucket)
+        global speed_queue
+        self.s3 = self.aws_session.resource('s3')
 
         while not copy_queue.empty():
             self.key = copy_queue.get()
-            self.dest_obj = self.dest_bucket.Object(self.key)
+            content_length = 0
+            try:
+                # Receiving content_length ob Object in Bucket
+                self.source_obj = self.s3.Object(self.source_bucket, self.key)
+                content_length = self.source_obj.content_length
+            except:
+                logger.debug('Content_length not available. Setting to 0.')
 
+            # Preparing copy task
+            self.dest_obj = self.s3.Object(self.destination_bucket, self.key)
             logger.info("Thread number {} copying key: {}".format(self.thread_number, self.key))
             try:
+                start = time.time()
+
                 self.dest_obj.copy(
                     {
                         'Bucket': self.source_bucket,
@@ -69,8 +81,14 @@ class S3BackupRestore(threading.Thread):
                     }
                 )
                 copy_queue.task_done()
+                stop = time.time()
             except ConnectionRefusedError as exc:
                 logger.error("To many connections open.")
+            except:
+                logger.exception("")
+                break
+            else:
+                speed_queue.put((content_length, float(stop - start)))
 
 
 def get_s3_keys(aws_session, bucket):
@@ -86,7 +104,7 @@ def get_s3_keys(aws_session, bucket):
         return keys
 
 
-def tag_deleted_keys(s3_client, backup_bucket, keys_to_tag):
+def tag_deleted_keys(aws_session, backup_bucket, keys_to_tag):
     deleted_count = 0
     deleted_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -95,7 +113,7 @@ def tag_deleted_keys(s3_client, backup_bucket, keys_to_tag):
             deleted = True
             deleted_at = True
 
-            resp = s3_client.get_object_tagging(
+            resp = aws_session.meta.client.get_object_tagging(
                 Bucket=backup_bucket,
                 Key=key
             )
@@ -109,8 +127,6 @@ def tag_deleted_keys(s3_client, backup_bucket, keys_to_tag):
                 except KeyError:
                     logger.debug("Tag key 'Deleted' not set.")
 
-            logger.debug(deleted)
-            logger.debug(deleted_at)
             if deleted or deleted_at:
                 kwargs = {
                     'Bucket': backup_bucket,
@@ -128,10 +144,10 @@ def tag_deleted_keys(s3_client, backup_bucket, keys_to_tag):
                         ]
                     }
                 }
-                logger.info("Key that will be tagged as deleted: {}".format(key))
-                resp = s3_client.put_object_tagging(**kwargs)
+                logger.info("{} will be tagged as deleted.".format(key))
+                resp = aws_session.meta.client.put_object_tagging(**kwargs)
                 deleted_count += 1
-        logger.info("Number of newly keys to be marked as deleted: {:d}".format(deleted_count))
+        logger.info("Number of keys marked as deleted: {:d}".format(deleted_count))
     except:
         logger.exception("")
 
@@ -155,21 +171,25 @@ if __name__ == '__main__':
         logger.info("List S3 Keys from {}".format(DESTINATION_BUCKET))
         dest_bucket_keys = get_s3_keys(aws_session, DESTINATION_BUCKET)
         logger.info("Number of keys in {}: {}".format(DESTINATION_BUCKET, len(dest_bucket_keys)))
-        sys.exit(127)
+
         # Adding source bucket keys to queue to make it thread safe
         for key in source_bucket_keys:
             copy_queue.put(key)
 
         th = list()
         logger.info("Generating {} threads.".format(THREAD_COUNT))
-        for i in range(0, cmd_args.thread_count):
-            th.append(S3BackupRestore(i, aws_session, SOURCE_BUCKET, DESTINATION_BUCKET))
-            th[i].daemon = True
-            th[i].start()
+        for thread_num in range(0, THREAD_COUNT):
+            th.append(S3BackupRestore(thread_num, aws_session, SOURCE_BUCKET, DESTINATION_BUCKET))
+            th[thread_num].daemon = True
+            th[thread_num].start()
+        logger.debug("Waiting for queue to be finished.")
         copy_queue.join()
+        logger.debug("Queue finished.")
 
         for i in range(0, THREAD_COUNT):
+            logger.debug("Waiting for thread number {} to be finished.".format(i))
             th[i].join()
+            logger.debug("Thread number {} finished.".format(i))
 
         # If script will be calle with flag --tag-deleted we will tag all newly deleted files
         # from source bucket as deleted in backup bucket
@@ -179,3 +199,12 @@ if __name__ == '__main__':
                 tag_deleted_keys(s3_client, DESTINATION_BUCKET, deleted_keys)
             except:
                 logger.exception("")
+
+        byte = 0
+        time = 0
+        while not speed_queue.empty():
+            obj = speed_queue.get()
+            byte += obj[0]
+            time += obj[1]
+        print("Transmissioned Bytes: {:.2f}".format(byte))
+        print("Total time s: {}".format(time))
