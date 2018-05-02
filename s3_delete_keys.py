@@ -28,7 +28,7 @@ def delete_s3_objects(session, bucket, with_versions=False):
     try:
         if with_versions:
             s3_resource.Bucket(bucket).objects.delete()
-            s3_resource.Bucket(bucket).objects_versions.delete()
+            s3_resource.Bucket(bucket).object_versions.delete()
         else:
             s3_resource.Bucket(bucket).objects.delete()
     except:
