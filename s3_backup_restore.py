@@ -6,10 +6,13 @@ import sys
 import threading
 import time
 from datetime import datetime
+from botocore.exceptions import ClientError, ParamValidationError
 
 copy_queue = queue.Queue()
 speed_queue = queue.Queue()
 comparison_queue = queue.Queue()
+deleted_keys_queue = queue.Queue()
+deletion_count_queue = queue.Queue()
 
 logging.basicConfig(
     level=logging.ERROR,
@@ -112,33 +115,57 @@ class CompareKeysClAndETag(threading.Thread):
                 comparison_queue.task_done()
 
 
-def tag_deleted_keys(aws_session, backup_bucket, keys_to_tag):
-    deleted_count = 0
-    deleted_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+class TagDeletedKeys(threading.Thread):
+    def __init__(self, thread_number, aws_session, destination_bucket):
+        threading.Thread.__init__(self)
+        self.thread_number = thread_number
+        self.aws_session = aws_session
+        self.destination_bucket = destination_bucket
 
-    try:
-        for key in keys_to_tag:
-            deleted = True
-            deleted_at = True
+    def run(self):
+        global deleted_keys_queue
+        global deletion_count_queue
+        self.s3 = self.aws_session.resource('s3')
+        self.deleted_count = 0
 
-            resp = aws_session.meta.client.get_object_tagging(
-                Bucket=backup_bucket,
-                Key=key
-            )
+        while not deleted_keys_queue.empty():
+            self.key = deleted_keys_queue.get()
+            self.deleted_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            self.deleted = True
+            self.deleted_at = True
 
-            for tag_key in resp['TagSet']:
+            try:
+                logger.debug("Getting tagging information from {}".format(self.key))
+                self.resp = self.s3.meta.client.get_object_tagging(
+                    Bucket=self.destination_bucket,
+                    Key=self.key
+                )
+            except ConnectionRefusedError:
+                logger.error("To many connections open.")
+                deleted_keys_queue.put(self.key)
+                continue
+            except:
+                deleted_keys_queue.put(self.key)
+                logger.exception("")
+                break
+
+            for self.tag_key in self.resp['TagSet']:
+                logger.debug("TagSet for key {}: {}".format(self.key, self.tag_key))
                 try:
-                    if tag_key['Key'] == 'Deleted':
-                        deleted = False
-                    if tag_key['Key'] == 'DeletedAt':
-                        deleted_at = False
+                    if self.tag_key['Key'] == 'Deleted':
+                        self.deleted = False
+                        logger.debug("Tag deleted exists. Set to False")
+                    if self.tag_key['Key'] == 'DeletedAt':
+                        self.deleted_at = False
+                        logger.debug("Tag DeletedAt exists. Set to False")
                 except KeyError:
-                    logger.debug("Tag key 'Deleted' not set.")
+                    logger.debug("Object {} has no tags.".format(self.key))
 
-            if deleted or deleted_at:
-                kwargs = {
-                    'Bucket': backup_bucket,
-                    'Key': key,
+            if self.deleted or self.deleted_at:
+                logger.debug("Thread number {} tagging key: {}".format(self.thread_number, self.key))
+                self.kwargs = {
+                    'Bucket': self.destination_bucket,
+                    'Key': self.key,
                     'Tagging': {
                         'TagSet': [
                             {
@@ -147,17 +174,23 @@ def tag_deleted_keys(aws_session, backup_bucket, keys_to_tag):
                             },
                             {
                                 'Key': 'DeletedAt',
-                                'Value': deleted_time
+                                'Value': self.deleted_time
                             }
                         ]
                     }
                 }
-                logger.info("{} will be tagged as deleted.".format(key))
-                resp = aws_session.meta.client.put_object_tagging(**kwargs)
-                deleted_count += 1
-        logger.info("Number of keys marked as deleted: {:d}".format(deleted_count))
-    except:
-        logger.exception("")
+                logger.info("{} will be tagged as deleted.".format(self.key))
+                try:
+                    self.resp = self.s3.meta.client.put_object_tagging(**self.kwargs)
+                    deleted_keys_queue.task_done()
+                    self.deleted_count += 1
+                except:
+                    deleted_keys_queue.put(self.key)
+                    logger.exception("")
+            else:
+                deleted_keys_queue.task_done()
+        deletion_count_queue.put(self.deleted_count)
+        logger.debug("Thread {} as marked {} keys as deleted".format(thread_num, self.deleted_count))
 
 
 def get_s3_keys(aws_session, bucket):
@@ -165,9 +198,6 @@ def get_s3_keys(aws_session, bucket):
 
     try:
         keys = [key.key for key in aws_session.resource('s3').Bucket(bucket).objects.all()]
-    except KeyboardInterrupt:
-        print("Exiting...")
-        sys.exit(127)
     except:
         logger.exception("")
         sys.exit(127)
@@ -179,8 +209,18 @@ if __name__ == '__main__':
     try:
         if PROFILE:
             aws_session = boto3.session.Session(profile_name=PROFILE)
+            cred = aws_session.get_credentials().get_frozen_credentials()
         else:
             aws_session = boto3.session.Session()
+    except KeyboardInterrupt:
+        print("Exiting...")
+        sys.exit(127)
+    except ClientError:
+        print("Exiting program. Wrong MFA token!")
+        sys.exit(127)
+    except ParamValidationError:
+        print("Exiting program. Empty MFA token!")
+        sys.exit(127)
     except:
         logger.exception("")
         sys.exit(127)
@@ -208,34 +248,29 @@ if __name__ == '__main__':
         logger.info("{} keys to check for equality.".format(len(keys_to_check)))
         logger.debug("Keys not in destination Bucket: {}".format(keys_to_check))
 
-        # Start equality check of objects in S3
-        # Puting objects not equal into copy_queue
-        th = list()
-        logger.info("Generating {} comparison threads.".format(THREAD_COUNT))
-        for thread_num in range(0, THREAD_COUNT):
-            th.append(CompareKeysClAndETag(thread_num, aws_session, SOURCE_BUCKET, DESTINATION_BUCKET))
-            th[thread_num].daemon = True
-            th[thread_num].start()
+        # Check if there are any objects to compare.
+        comparison_queue_size = comparison_queue.qsize()
+        if comparison_queue_size > 0:
+            # Check if thread_count_size is less than THREAD_COUNT
+            # If so set THREAD_COUNT to thread_count_size
+            if comparison_queue_size < THREAD_COUNT:
+                thread_count = comparison_queue_size
+            else:
+                thread_count = THREAD_COUNT
 
-        logger.info("Waiting for comparison queue to be finished.")
-        try:
-            while True:
-                if not comparison_queue.empty():
-                    time.sleep(500/1000)
-                else:
-                    break
-        except KeyboardInterrupt:
-            print("Exiting...")
-            sys.exit(127)
-        else:
-            comparison_queue.join()
-            logger.info("Comparison queue finished.")
+            # Start equality check of objects in S3
+            # Puting objects not equal into copy_queue
+            th = list()
+            logger.info("Generating {} comparison threads.".format(thread_count))
+            for thread_num in range(0, thread_count):
+                th.append(CompareKeysClAndETag(thread_num, aws_session, SOURCE_BUCKET, DESTINATION_BUCKET))
+                th[thread_num].daemon = True
+                th[thread_num].start()
 
-        for i in range(0, THREAD_COUNT):
-            logger.info("Waiting for comparison thread {} to be finished.".format(i))
+            logger.info("Waiting for comparison queue to be finished.")
             try:
                 while True:
-                    if th[i].is_alive():
+                    if not comparison_queue.empty():
                         time.sleep(500/1000)
                     else:
                         break
@@ -243,8 +278,23 @@ if __name__ == '__main__':
                 print("Exiting...")
                 sys.exit(127)
             else:
-                th[i].join()
-                logger.info("Comparison thread {} finished.".format(i))
+                comparison_queue.join()
+                logger.info("Comparison queue finished.")
+
+            for i in range(0, thread_count):
+                logger.debug("Waiting for comparison thread {} to be finished.".format(i))
+                try:
+                    while True:
+                        if th[i].is_alive():
+                            time.sleep(500/1000)
+                        else:
+                            break
+                except KeyboardInterrupt:
+                    print("Exiting...")
+                    sys.exit(127)
+                else:
+                    th[i].join()
+                    logger.info("Comparison thread {} finished.".format(i))
 
         # Check if there are any objects to copy.
         copy_queue_size = copy_queue.qsize()
@@ -252,13 +302,14 @@ if __name__ == '__main__':
             # Check if copy_queue_size is less than THREAD_COUNT
             # If so set THREAD_COUNT to copy_queue_size
             if copy_queue_size < THREAD_COUNT:
-                THREAD_COUNT = copy_queue_size
-
+                thread_count = copy_queue_size
+            else:
+                thread_count = THREAD_COUNT
             # Start copying S3 objects to destiantion bucket
             # Consume copy_queue until it is empty
             th = list()
-            logger.info("Generating {} copy threads.".format(THREAD_COUNT))
-            for thread_num in range(0, THREAD_COUNT):
+            logger.info("Generating {} copy threads.".format(thread_count))
+            for thread_num in range(0, thread_count):
                 th.append(S3BackupRestore(thread_num, aws_session, SOURCE_BUCKET, DESTINATION_BUCKET))
                 th[thread_num].daemon = True
                 th[thread_num].start()
@@ -276,8 +327,8 @@ if __name__ == '__main__':
                 copy_queue.join()
                 logger.info("Copy queue finished.")
 
-            for i in range(0, THREAD_COUNT):
-                logger.info("Waiting for copy thread {} to be finished.".format(i))
+            for i in range(0, thread_count):
+                logger.debug("Waiting for copy thread {} to be finished.".format(i))
                 try:
                     while True:
                         if th[i].is_alive():
@@ -297,7 +348,66 @@ if __name__ == '__main__':
         # from source bucket as deleted in backup bucket
         if TAG_DELETED:
             try:
-                deleted_keys = set(dest_bucket_keys) - set(source_bucket_keys)
-                tag_deleted_keys(aws_session, DESTINATION_BUCKET, deleted_keys)
+                # Add deleted keys to be marked to deleted keys queue
+                keys_to_delete = set(dest_bucket_keys) - set(source_bucket_keys)
+                logger.debug("Keys to tag as deleted:\n{}".format(keys_to_delete))
+                [deleted_keys_queue.put(key) for key in keys_to_delete]
             except:
                 logger.exception("")
+
+            # Check if there are any objects to copy.
+            deleted_keys_size = deleted_keys_queue.qsize()
+            if deleted_keys_size > 0:
+                # Check if deleted_keys_size is less than THREAD_COUNT
+                # If so set THREAD_COUNT to deleted_keys_size
+                if deleted_keys_size < THREAD_COUNT:
+                    thread_count = deleted_keys_size
+                else:
+                    thread_count = THREAD_COUNT
+
+                # Start tagging deleted S3 objects in destiantion bucket
+                # Consume deleted_keys_queue until it is empty
+                th = list()
+                logger.info("Generating {} tagging thread(s).".format(thread_count))
+                for thread_num in range(0, thread_count):
+                    th.append(TagDeletedKeys(thread_num, aws_session, DESTINATION_BUCKET))
+                    th[thread_num].daemon = True
+                    th[thread_num].start()
+                logger.info("Waiting for deleted keys queue to be finished.")
+                try:
+                    while True:
+                        if not deleted_keys_queue.empty():
+                            time.sleep(500/1000)
+                        else:
+                            break
+                except KeyboardInterrupt:
+                    print("Exiting...")
+                    sys.exit(127)
+                else:
+                    copy_queue.join()
+                    logger.info("Deleted keys queue finished.")
+
+                for i in range(0, thread_count):
+                    logger.debug("Waiting for tagging thread {} to be finished.".format(i))
+                    try:
+                        while True:
+                            if th[i].is_alive():
+                                time.sleep(500/1000)
+                            else:
+                                break
+                    except KeyboardInterrupt:
+                        print("Exiting...")
+                        sys.exit(127)
+                    else:
+                        th[i].join()
+                        logger.info("Tagging thread number {} finished.".format(i))
+
+            sum_deleted = 0
+            while not deletion_count_queue.empty():
+                try:
+                    sum_deleted += int(deletion_count_queue.get())
+                except:
+                    logger.exception("")
+                else:
+                    deletion_count_queue.task_done()
+            logger.info("{} keys marked as deleted.".format(sum_deleted))
