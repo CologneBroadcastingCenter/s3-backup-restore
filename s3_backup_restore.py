@@ -25,7 +25,6 @@ parser.add_argument('--prefix', default='', help='Prefix to list objects from an
 parser.add_argument('--tag-deleted', action='store_true', help='Tag all objects that are deleted in source bucket but still present in backup bucket.')
 parser.add_argument('--thread-count', default=10, metavar='N', type=int, help='Starting count for threads.')
 parser.add_argument('--verbose', '-v', action='count')
-parser.add_argument('--dry-run', action='store_true', help='Simulate what will happen.')
 cmd_args = parser.parse_args()
 
 PROFILE = cmd_args.profile
@@ -35,7 +34,6 @@ PREFIX = cmd_args.prefix
 TAG_DELETED = cmd_args.tag_deleted
 THREAD_COUNT = cmd_args.thread_count
 VERBOSE = cmd_args.verbose
-DRY_RUN = cmd_args.dry_run
 
 
 if VERBOSE and VERBOSE == 1:
@@ -77,22 +75,6 @@ class S3BackupRestore(threading.Thread):
                 break
 
 
-def get_s3_keys(aws_session, bucket):
-    keys = list()
-
-    try:
-        for key in aws_session.resource('s3').Bucket(bucket).objects.all():
-            keys.append(key.key)
-    except KeyboardInterrupt:
-        print("Exiting...")
-        sys.exit(127)
-    except:
-        logger.exception("")
-        sys.exit(127)
-    else:
-        return keys
-
-
 class CompareKeysClAndETag(threading.Thread):
 
     def __init__(self, thread_number, aws_session, source_bucket, dest_bucket):
@@ -106,25 +88,25 @@ class CompareKeysClAndETag(threading.Thread):
         global copy_queue
         global comparison_queue
         try:
-            s3 = self.aws_session.resource('s3')
+            self.s3 = self.aws_session.resource('s3')
         except:
             logger.exception("")
         while not comparison_queue.empty():
             self.key = comparison_queue.get()
 
             try:
-                source_cl = s3.Object(self.source_bucket, self.key).content_length
-                source_etag = s3.Object(self.source_bucket, self.key).e_tag
+                self.source_cl = self.s3.Object(self.source_bucket, self.key).content_length
+                self.source_etag = self.s3.Object(self.source_bucket, self.key).e_tag
 
-                dest_cl = s3.Object(self.dest_bucket, self.key).content_length
-                dest_etag = s3.Object(self.dest_bucket, self.key).e_tag
+                self.dest_cl = self.s3.Object(self.dest_bucket, self.key).content_length
+                self.dest_etag = self.s3.Object(self.dest_bucket, self.key).e_tag
             except ConnectionRefusedError as exc:
                 logger.error("To many connections open.")
             except:
                 logger.exception("")
                 break
             else:
-                if source_cl != dest_cl or source_etag != dest_etag:
+                if self.source_cl != self.dest_cl or self.source_etag != self.dest_etag:
                     print("Adding {} to queue".format(key))
                     copy_queue.put(key)
                 comparison_queue.task_done()
@@ -176,6 +158,22 @@ def tag_deleted_keys(aws_session, backup_bucket, keys_to_tag):
         logger.info("Number of keys marked as deleted: {:d}".format(deleted_count))
     except:
         logger.exception("")
+
+
+def get_s3_keys(aws_session, bucket):
+    keys = list()
+
+    try:
+        keys = [key.key for key in aws_session.resource('s3').Bucket(bucket).objects.all()]
+    except KeyboardInterrupt:
+        print("Exiting...")
+        sys.exit(127)
+    except:
+        logger.exception("")
+        sys.exit(127)
+    else:
+        return keys
+
 
 if __name__ == '__main__':
     try:
@@ -248,7 +246,6 @@ if __name__ == '__main__':
                 th[i].join()
                 logger.info("Comparison thread {} finished.".format(i))
 
-        input("Any key to proceed...")
         # Check if there are any objects to copy.
         copy_queue_size = copy_queue.qsize()
         if copy_queue_size > 0:
