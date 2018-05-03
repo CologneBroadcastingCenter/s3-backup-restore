@@ -5,6 +5,7 @@ import queue
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime
 from botocore.exceptions import ClientError, ParamValidationError
 
@@ -58,6 +59,7 @@ class S3BackupRestore(threading.Thread):
         self.s3 = self.aws_session.resource('s3')
 
         while not copy_queue.empty():
+            self.uuid = uuid.uuid4()
             self.key = copy_queue.get()
 
             # Preparing copy task
@@ -72,14 +74,18 @@ class S3BackupRestore(threading.Thread):
                 )
                 copy_queue.task_done()
             except ConnectionRefusedError as exc:
-                logger.error("To many connections open.")
+                logger.error("""To many connections open.
+                Put {} back to queue.
+                UUDI: {}""".format(self.key, self.uuid))
+                copy_queue.put(self.key)
             except:
-                logger.exception("")
-                break
+                logger.exception("""Unhandeld exception occured.
+                Put {} back to queue.
+                UUDI: {}""".format(self.key, self.uuid))
+                copy_queue.put(self.key)
 
 
 class CompareKeysClAndETag(threading.Thread):
-
     def __init__(self, thread_number, aws_session, source_bucket, dest_bucket):
         threading.Thread.__init__(self)
         self.thread_number = thread_number
@@ -96,6 +102,7 @@ class CompareKeysClAndETag(threading.Thread):
             logger.exception("")
         while not comparison_queue.empty():
             self.key = comparison_queue.get()
+            self.uuid = uuid.uuid4()
 
             try:
                 self.source_cl = self.s3.Object(self.source_bucket, self.key).content_length
@@ -104,14 +111,19 @@ class CompareKeysClAndETag(threading.Thread):
                 self.dest_cl = self.s3.Object(self.dest_bucket, self.key).content_length
                 self.dest_etag = self.s3.Object(self.dest_bucket, self.key).e_tag
             except ConnectionRefusedError as exc:
-                logger.error("To many connections open.")
+                logger.error(""""To many connections open.
+                Put {} back to queue.
+                UUDI: {}""".format(self.key, self.uuid))
+                comparison_queue.put(self.key)
             except:
-                logger.exception("")
-                break
+                logger.exception("""Unhandeld exception occured.
+                Put {} back to queue.
+                UUDI: {}""".format(self.key, self.uuid))
+                comparison_queue.put(self.key)
             else:
                 if self.source_cl != self.dest_cl or self.source_etag != self.dest_etag:
-                    print("Adding {} to queue".format(key))
-                    copy_queue.put(key)
+                    logger.info("Adding {} to queue".format(self.key))
+                    copy_queue.put(self.key)
                 comparison_queue.task_done()
 
 
@@ -133,6 +145,7 @@ class TagDeletedKeys(threading.Thread):
             self.deleted_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
             self.deleted = True
             self.deleted_at = True
+            self.uuid = uuid.uuid4()
 
             try:
                 logger.debug("Getting tagging information from {}".format(self.key))
@@ -141,13 +154,16 @@ class TagDeletedKeys(threading.Thread):
                     Key=self.key
                 )
             except ConnectionRefusedError:
-                logger.error("To many connections open.")
+                logger.error(""""To many connections open.
+                Put {} back to queue.
+                UUDI: {}""".format(self.key, self.uuid))
                 deleted_keys_queue.put(self.key)
                 continue
             except:
+                logger.exception("""Unhandeld exception occured.
+                Put {} back to queue.
+                UUDI: {}""".format(self.key, self.uuid))
                 deleted_keys_queue.put(self.key)
-                logger.exception("")
-                break
 
             for self.tag_key in self.resp['TagSet']:
                 logger.debug("TagSet for key {}: {}".format(self.key, self.tag_key))
@@ -194,8 +210,8 @@ class TagDeletedKeys(threading.Thread):
 
 
 def get_s3_keys(aws_session, bucket):
+    logger.info("Listing {} for objects.".format(bucket))
     keys = list()
-
     try:
         keys = [key.key for key in aws_session.resource('s3').Bucket(bucket).objects.all()]
     except:
