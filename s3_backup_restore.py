@@ -5,6 +5,7 @@ import queue
 import sys
 import threading
 import time
+import os
 from datetime import datetime, timedelta, timezone
 from botocore.exceptions import ClientError, ParamValidationError
 
@@ -12,6 +13,14 @@ copy_queue = queue.Queue()
 comparison_queue = queue.Queue()
 deleted_keys_queue = queue.Queue()
 deletion_count_queue = queue.Queue()
+
+# Cloudwatch Configuration
+cw_namespace = 'BackupRecovery'
+
+try:
+    cw_dimension_name = os.environ['AWSBatchComputeEnvName']
+except KeyError:
+    cw_dimension_name = 'Dev'
 
 logging.basicConfig(
     level=logging.ERROR,
@@ -27,6 +36,7 @@ parser.add_argument('--last-modified-since', default=48, type=int, help='Compare
 parser.add_argument('--tag-deleted', action='store_true', help='Tag all objects that are deleted in source bucket but still present in backup bucket.')
 parser.add_argument('--thread-count', default=10, metavar='N', type=int, help='Starting count for threads.')
 parser.add_argument('--profile', '-p', help='AWS profile name configure in aws config files.')
+parser.add_argument('--region', default='eu-central-1', help='AWS Region')
 parser.add_argument('--verbose', '-v', action='count')
 parser.add_argument('--copy-num-objects', help='[DEBUGGING] Number of objecst to copy.', required=False, type=int, metavar='N')
 cmd_args = parser.parse_args()
@@ -37,6 +47,7 @@ DESTINATION_BUCKET = cmd_args.destination_bucket
 LAST_MODIFIED_SINCE = cmd_args.last_modified_since
 TAG_DELETED = cmd_args.tag_deleted
 THREAD_COUNT = cmd_args.thread_count
+AWS_REGION = cmd_args.region
 VERBOSE = cmd_args.verbose
 COPY_NUM_OBJECTS = cmd_args.copy_num_objects
 
@@ -236,13 +247,54 @@ def get_s3_keys(aws_session, bucket, copy_num_objects=None):
         return keys
 
 
+def cw_put_queue_count(aws_session, cw_namespace, cw_metric_name, cw_dimension_name, statistic_value):
+    cw = aws_session.resource('cloudwatch')
+    try:
+        float(statistic_value)
+    except ValueError:
+        logger.error("Statistic Value not convertibal to float")
+
+    try:
+        if statistic_value != 0:
+            cw.Metric(cw_namespace, cw_metric_name).put_data(
+                MetricData=[
+                    {
+                        'MetricName': cw_metric_name,
+                        'Dimensions': [
+                            {
+                                'Name': cw_dimension_name,
+                                'Value': cw_metric_name
+                            }
+                        ],
+                        'StatisticValues': {
+                            'SampleCount': statistic_value,
+                            'Sum': statistic_value,
+                            'Minimum': statistic_value,
+                            'Maximum': statistic_value
+                        },
+                        'Unit': 'Count',
+                        'StorageResolution': 1
+                    }
+                ]
+            )
+    except InvalidParameterValue:
+        logger.error("StatisticValue is not well formed or equal 0")
+    except:
+        logger.exception("")
+
+
 if __name__ == '__main__':
     try:
         if PROFILE:
-            aws_session = boto3.session.Session(profile_name=PROFILE)
+            aws_session = boto3.session.Session(profile_name=PROFILE, region_name=AWS_REGION)
             cred = aws_session.get_credentials().get_frozen_credentials()
         else:
-            aws_session = boto3.session.Session()
+            aws_session = boto3.session.Session(region_name=AWS_REGION)
+        try:
+            cw_res = aws_session.resource('cloudwatch')
+        except:
+            logger.exception("")
+            sys.exit(127)
     except KeyboardInterrupt:
         logger.warning("Exiting...")
         sys.exit(127)
@@ -259,12 +311,10 @@ if __name__ == '__main__':
         # Getting S3 keys from source bucket
         logger.debug("List S3 Keys from {}".format(SOURCE_BUCKET))
         source_bucket_keys = get_s3_keys(aws_session, SOURCE_BUCKET, copy_num_objects=COPY_NUM_OBJECTS)
-        logger.info("Number of keys in {}: {}".format(SOURCE_BUCKET, len(source_bucket_keys)))
 
         # Getting S3 keys from source bucket
         logger.debug("List S3 Keys from {}".format(DESTINATION_BUCKET))
         dest_bucket_keys = get_s3_keys(aws_session, DESTINATION_BUCKET)
-        logger.info("Number of keys in {}: {}".format(DESTINATION_BUCKET, len(dest_bucket_keys)))
 
         # Sending keys to queue if they are not in Destination Bucket
         keys_not_in_dest_bucket = set(source_bucket_keys) - set(dest_bucket_keys)
@@ -277,10 +327,12 @@ if __name__ == '__main__':
         [comparison_queue.put(key) for key in keys_to_check]
         logger.warning("{} keys to check for equality.".format(len(keys_to_check)))
         logger.debug("Keys not in destination Bucket: {}".format(keys_to_check))
-        logger.info("Comparison queue size: {}".format(comparison_queue.qsize()))
 
         # Check if there are any objects to compare.
         comparison_queue_size = comparison_queue.qsize()
+        logger.info("Comparison queue size: {}".format(comparison_queue_size))
+        # Put comparison_queue_size to Cloudwatch
+        cw_put_queue_count(aws_session, cw_namespace, 'BucketObjectsToCompare', cw_dimension_name, comparison_queue_size)
         if comparison_queue_size > 0:
             # Check if thread_count_size is less than THREAD_COUNT
             # If so set THREAD_COUNT to thread_count_size
@@ -304,8 +356,10 @@ if __name__ == '__main__':
             try:
                 while True:
                     if not comparison_queue.empty():
-                        time.sleep(1)
-                        logger.warning("{} objects left to compare.".format(comparison_queue.qsize()))
+                        time.sleep(15)
+                        qs = comparison_queue.qsize()
+                        cw_put_queue_count(aws_session, cw_namespace, 'BucketObjectsToCompare', cw_dimension_name, qs)
+                        logger.warning("{} objects left to compare.".format(qs))
                     else:
                         break
             except KeyboardInterrupt:
@@ -334,6 +388,7 @@ if __name__ == '__main__':
         # Check if there are any objects to copy.
         logger.info("Copy queue size: {}".format(copy_queue.qsize()))
         copy_queue_size = copy_queue.qsize()
+        cw_put_queue_count(aws_session, cw_namespace, 'BucketObjectsToCopy', cw_dimension_name, copy_queue_size)
         if copy_queue_size > 0:
             # Check if copy_queue_size is less than THREAD_COUNT
             # If so set THREAD_COUNT to copy_queue_size
@@ -356,8 +411,10 @@ if __name__ == '__main__':
             try:
                 while True:
                     if not copy_queue.empty():
-                        time.sleep(1)
-                        logger.warning("{} objects left to copy".format(copy_queue.qsize()))
+                        time.sleep(15)
+                        qs = copy_queue.qsize()
+                        cw_put_queue_count(aws_session, cw_namespace, 'BucketObjectsToCopy', cw_dimension_name, qs)
+                        logger.warning("{} objects left to copy".format(qs))
                     else:
                         break
             except KeyboardInterrupt:
@@ -402,6 +459,7 @@ if __name__ == '__main__':
 
             # Check if there are any objects to copy.
             deleted_keys_size = deleted_keys_queue.qsize()
+            cw_put_queue_count(aws_session, cw_namespace, 'BucketObjectsToTagAsDeleted', cw_dimension_name, deleted_keys_size)
             if deleted_keys_size > 0:
                 # Check if deleted_keys_size is less than THREAD_COUNT
                 # If so set THREAD_COUNT to deleted_keys_size
@@ -423,7 +481,9 @@ if __name__ == '__main__':
                 try:
                     while True:
                         if not deleted_keys_queue.empty():
-                            time.sleep(1)
+                            time.sleep(15)
+                            qs = deleted_keys_queue.qsize()
+                            cw_put_queue_count(aws_session, cw_namespace, 'BucketObjectsToTagAsDeleted', cw_dimension_name, qs)
                             logger.warning("{} objects left to tag as deleted".format(deleted_keys_queue.qsize()))
                         else:
                             break
@@ -439,7 +499,7 @@ if __name__ == '__main__':
                     try:
                         while True:
                             if th[i].is_alive():
-                                time.sleep(500/1000)
+                                time.sleep(1)
                             else:
                                 break
                     except KeyboardInterrupt:
@@ -458,4 +518,5 @@ if __name__ == '__main__':
                 else:
                     deletion_count_queue.task_done()
             logger.info("{} keys marked as deleted.".format(sum_deleted))
+            cw_put_queue_count(aws_session, cw_namespace, 'BucketObjectsMarkedAsDeleted', cw_dimension_name, deleted_keys_size)
             logger.warning("Tagging of objects took {} seconds".format(round(time.time()-start)))
