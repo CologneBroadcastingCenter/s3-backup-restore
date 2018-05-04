@@ -5,7 +5,7 @@ import queue
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from botocore.exceptions import ClientError, ParamValidationError
 
 copy_queue = queue.Queue()
@@ -23,6 +23,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--source-bucket', '-s', help='Source Bucket to sync diff from.', required=True)
 parser.add_argument('--destination-bucket', '-d', help='Destination Bucket to sync to.', required=True)
 parser.add_argument('--prefix', default='', help='Prefix to list objects from and to sync to.')
+parser.add_argument('--last-modified-since', default=48, type=int, help='Compare bucket objects if they where modified since the last given hours. If so copy them to backup.', required=False, metavar='N')
 parser.add_argument('--tag-deleted', action='store_true', help='Tag all objects that are deleted in source bucket but still present in backup bucket.')
 parser.add_argument('--thread-count', default=10, metavar='N', type=int, help='Starting count for threads.')
 parser.add_argument('--profile', '-p', help='AWS profile name configure in aws config files.')
@@ -33,6 +34,7 @@ cmd_args = parser.parse_args()
 PROFILE = cmd_args.profile
 SOURCE_BUCKET = cmd_args.source_bucket
 DESTINATION_BUCKET = cmd_args.destination_bucket
+LAST_MODIFIED_SINCE = cmd_args.last_modified_since
 TAG_DELETED = cmd_args.tag_deleted
 THREAD_COUNT = cmd_args.thread_count
 VERBOSE = cmd_args.verbose
@@ -53,6 +55,10 @@ class S3BackupRestore(threading.Thread):
         self.aws_session = aws_session
         self.source_bucket = source_bucket
         self.destination_bucket = destination_bucket
+        self.transfere_config = boto3.s3.transfer.TransferConfig(
+            use_threads=True,
+            max_concurrency=10
+        )
 
     def run(self):
         global copy_queue
@@ -65,11 +71,10 @@ class S3BackupRestore(threading.Thread):
             self.dest_obj = self.s3.Object(self.destination_bucket, self.key)
             logger.info("Thread number {} copying key: {}".format(self.thread_number, self.key))
             try:
+                self.copy_source = {'Bucket': self.source_bucket, 'Key': self.key}
                 self.dest_obj.copy(
-                    {
-                        'Bucket': self.source_bucket,
-                        'Key': self.key
-                    }
+                    self.copy_source,
+                    Config=self.transfere_config
                 )
                 copy_queue.task_done()
             except ConnectionRefusedError as exc:
@@ -82,13 +87,15 @@ class S3BackupRestore(threading.Thread):
                 copy_queue.put(self.key)
 
 
-class CompareKeysClAndETag(threading.Thread):
-    def __init__(self, thread_number, aws_session, source_bucket, dest_bucket):
+class CompareBucketObjects(threading.Thread):
+    def __init__(self, thread_number, aws_session, source_bucket, dest_bucket, last_modified_since=48):
         threading.Thread.__init__(self)
         self.thread_number = thread_number
         self.aws_session = aws_session
         self.source_bucket = source_bucket
         self.dest_bucket = dest_bucket
+        self.last_modified_since = last_modified_since
+        self.time_obj = datetime.now(timezone.utc)-timedelta(hours=self.last_modified_since)
 
     def run(self):
         global copy_queue
@@ -101,11 +108,12 @@ class CompareKeysClAndETag(threading.Thread):
             self.key = comparison_queue.get()
 
             try:
-                self.source_cl = self.s3.Object(self.source_bucket, self.key).content_length
-                self.source_etag = self.s3.Object(self.source_bucket, self.key).e_tag
+                self.src_lm = self.s3.Object(self.source_bucket, self.key).last_modified
+                logger.debug("Source LastModified: {}".format(self.src_lm))
 
-                self.dest_cl = self.s3.Object(self.dest_bucket, self.key).content_length
-                self.dest_etag = self.s3.Object(self.dest_bucket, self.key).e_tag
+                self.src_cl = self.s3.Object(self.source_bucket, self.key).content_length
+                self.dst_cl = self.s3.Object(self.dest_bucket, self.key).content_length
+                logger.debug("Source ContentLength: \t{}\nDestinatin ContentLength: \t{}".format(self.src_cl, self.dst_cl))
             except ConnectionRefusedError as exc:
                 logger.error("To many connections open.\n\
                 Put {} back to queue.".format(self.key))
@@ -115,8 +123,13 @@ class CompareKeysClAndETag(threading.Thread):
                 Put {} back to queue.".format(self.key,))
                 comparison_queue.put(self.key)
             else:
-                if self.source_cl != self.dest_cl or self.source_etag != self.dest_etag:
-                    logger.info("Adding {} to queue".format(self.key))
+                if self.src_cl != self.dst_cl:
+                    logger.info("Objects content lengths are unequal.\n\
+                    Adding {} to queue.".format(self.key))
+                    copy_queue.put(self.key)
+                elif self.src_lm > self.time_obj:
+                    logger.info("Object modified within last {}hours.\n\
+                    Adding {} to queue.".format(self.last_modified_since, self.key))
                     copy_queue.put(self.key)
                 comparison_queue.task_done()
 
@@ -258,14 +271,13 @@ if __name__ == '__main__':
         [copy_queue.put(key) for key in keys_not_in_dest_bucket]
         logger.warning("{} key(s) not in destination Bucket.".format(len(keys_not_in_dest_bucket)))
         logger.debug("Keys not in destination Bucket: {}".format(keys_not_in_dest_bucket))
-        logger.info("Copy queue size: {}".format(copy_queue.qsize()))
 
         # Check all keys existing in destination bucket and source bucket
         keys_to_check = set(source_bucket_keys) & set(dest_bucket_keys)
         [comparison_queue.put(key) for key in keys_to_check]
         logger.warning("{} keys to check for equality.".format(len(keys_to_check)))
         logger.debug("Keys not in destination Bucket: {}".format(keys_to_check))
-        logger.info("Comparison queue size: {}".format(copy_queue.qsize()))
+        logger.info("Comparison queue size: {}".format(comparison_queue.qsize()))
 
         # Check if there are any objects to compare.
         comparison_queue_size = comparison_queue.qsize()
@@ -282,8 +294,9 @@ if __name__ == '__main__':
             th = list()
             logger.warning("Starting comparison.")
             logger.info("Generating {} comparison threads.".format(thread_count))
+            start = time.time()
             for thread_num in range(0, thread_count):
-                th.append(CompareKeysClAndETag(thread_num, aws_session, SOURCE_BUCKET, DESTINATION_BUCKET))
+                th.append(CompareBucketObjects(thread_num, aws_session, SOURCE_BUCKET, DESTINATION_BUCKET, LAST_MODIFIED_SINCE))
                 th[thread_num].daemon = True
                 th[thread_num].start()
 
@@ -316,8 +329,10 @@ if __name__ == '__main__':
                 else:
                     th[i].join()
                     logger.info("Comparison thread {} finished.".format(i))
+            logger.warning("Comparison of objects took {} seconds".format(round(time.time()-start)))
 
         # Check if there are any objects to copy.
+        logger.info("Copy queue size: {}".format(copy_queue.qsize()))
         copy_queue_size = copy_queue.qsize()
         if copy_queue_size > 0:
             # Check if copy_queue_size is less than THREAD_COUNT
@@ -329,8 +344,10 @@ if __name__ == '__main__':
             # Start copying S3 objects to destiantion bucket
             # Consume copy_queue until it is empty
             th = list()
+            logger.warning("{} ojects to copy.".format(copy_queue.qsize()))
             logger.warning("Starting copy task.")
             logger.info("Generating {} copy threads.".format(thread_count))
+            start = time.time()
             for thread_num in range(0, thread_count):
                 th.append(S3BackupRestore(thread_num, aws_session, SOURCE_BUCKET, DESTINATION_BUCKET))
                 th[thread_num].daemon = True
@@ -367,6 +384,7 @@ if __name__ == '__main__':
             logger.warning("Copy task finished.")
         else:
             logger.warning("No objects to copy!")
+        logger.warning("Copying of objects took {} seconds".format(round(time.time()-start)))
 
         # If script will be calle with flag --tag-deleted we will tag all newly deleted files
         # from source bucket as deleted in backup bucket
@@ -378,6 +396,7 @@ if __name__ == '__main__':
                 logger.debug("Keys to tag as deleted:\n{}".format(keys_to_delete))
                 [deleted_keys_queue.put(key) for key in keys_to_delete]
                 logger.debug("Deleted keys queue size {}.".format(deleted_keys_queue.qsize()))
+                start = time.time()
             except:
                 logger.exception("")
 
@@ -439,3 +458,4 @@ if __name__ == '__main__':
                 else:
                     deletion_count_queue.task_done()
             logger.info("{} keys marked as deleted.".format(sum_deleted))
+            logger.warning("Tagging of objects took {} seconds".format(round(time.time()-start)))
