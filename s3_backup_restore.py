@@ -29,16 +29,54 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--source-bucket', '-s', help='Source Bucket to sync diff from.', required=True)
-parser.add_argument('--destination-bucket', '-d', help='Destination Bucket to sync to.', required=True)
-parser.add_argument('--prefix', default='', help='Prefix to list objects from and to sync to.')
-parser.add_argument('--last-modified-since', default=48, type=int, help='Compare bucket objects if they where modified since the last given hours. If so copy them to backup.', required=False, metavar='N')
-parser.add_argument('--tag-deleted', action='store_true', help='Tag all objects that are deleted in source bucket but still present in backup bucket.')
-parser.add_argument('--thread-count', default=10, metavar='N', type=int, help='Starting count for threads.')
-parser.add_argument('--profile', '-p', help='AWS profile name configure in aws config files.')
-parser.add_argument('--region', default='eu-central-1', help='AWS Region')
-parser.add_argument('--verbose', '-v', action='count')
-parser.add_argument('--copy-num-objects', help='[DEBUGGING] Number of objecst to copy.', required=False, type=int, metavar='N')
+parser.add_argument(
+    '--source-bucket',
+    '-s',
+    help='Source Bucket to sync diff from.',
+    required=True)
+parser.add_argument(
+    '--destination-bucket',
+    '-d',
+    help='Destination Bucket to sync to.',
+    required=True)
+parser.add_argument(
+    '--prefix',
+    default='',
+    help='Prefix to list objects from and to sync to.')
+parser.add_argument(
+    '--last-modified-since',
+    default=48,
+    type=int,
+    help='Compare bucket objects if they where modified since the last given hours. If so copy them to backup.',
+    required=False,
+    metavar='N')
+parser.add_argument(
+    '--tag-deleted',
+    action='store_true',
+    help='Tag all objects that are deleted in source bucket but still present in backup bucket.')
+parser.add_argument(
+    '--thread-count',
+    default=10,
+    metavar='N',
+    type=int,
+    help='Starting count for threads.')
+parser.add_argument(
+    '--profile',
+    '-p',
+    help='AWS profile name configure in aws config files.')
+parser.add_argument(
+    '--region',
+    default='eu-central-1',
+    help='AWS Region')
+parser.add_argument(
+    '--verbose', '-v',
+    action='count')
+parser.add_argument(
+    '--copy-num-objects',
+    help='[DEBUGGING] Number of objecst to copy.',
+    required=False,
+    type=int,
+    metavar='N')
 cmd_args = parser.parse_args()
 
 PROFILE = cmd_args.profile
@@ -60,7 +98,7 @@ elif VERBOSE and VERBOSE >= 3:
 
 
 class S3BackupRestore(threading.Thread):
-    def __init__(self, thread_number, aws_session, source_bucket, destination_bucket):
+    def __init__(self, thread_number, aws_session, source_bucket, destination_bucket, cw_namespace, cw_dimension_name):
         threading.Thread.__init__(self)
         self.thread_number = thread_number
         self.aws_session = aws_session
@@ -70,6 +108,9 @@ class S3BackupRestore(threading.Thread):
             use_threads=True,
             max_concurrency=10
         )
+        self.cw_namespace = cw_namespace
+        self.cw_dimension_name = cw_dimension_name
+        self.cw_metric_name = 'BucketObjectsToCopyErrors'
 
     def run(self):
         global copy_queue
@@ -95,11 +136,48 @@ class S3BackupRestore(threading.Thread):
             except:
                 logger.exception("Unhandeld exception occured.\n\
                             Put {} back to queue.".format(self.key))
+                self.cw_put_error()
                 copy_queue.put(self.key)
+
+    def cw_put_error(self):
+        self.cw = self.aws_session.resource('cloudwatch')
+        self.statistic_value = 1
+        try:
+            float(self.statistic_value)
+        except ValueError:
+            logger.error("Statistic Value not convertibal to float")
+
+        try:
+            if self.statistic_value != 0:
+                cw.Metric(self.cw_namespace, self.cw_metric_name).put_data(
+                    MetricData=[
+                        {
+                            'MetricName': self.cw_metric_name,
+                            'Dimensions': [
+                                {
+                                    'Name': self.cw_dimension_name,
+                                    'Value': self.cw_metric_name
+                                }
+                            ],
+                            'StatisticValues': {
+                                'SampleCount': self.statistic_value,
+                                'Sum': self.statistic_value,
+                                'Minimum': self.statistic_value,
+                                'Maximum': self.statistic_value
+                            },
+                            'Unit': 'Count',
+                            'StorageResolution': 1
+                        }
+                    ]
+                )
+        except InvalidParameterValue:
+            logger.error("StatisticValue is not well formed or equal 0")
+        except:
+            logger.exception("")
 
 
 class CompareBucketObjects(threading.Thread):
-    def __init__(self, thread_number, aws_session, source_bucket, dest_bucket, last_modified_since=48):
+    def __init__(self, thread_number, aws_session, source_bucket, dest_bucket, cw_namespace, cw_dimension_name, last_modified_since=48):
         threading.Thread.__init__(self)
         self.thread_number = thread_number
         self.aws_session = aws_session
@@ -107,6 +185,9 @@ class CompareBucketObjects(threading.Thread):
         self.dest_bucket = dest_bucket
         self.last_modified_since = last_modified_since
         self.time_obj = datetime.now(timezone.utc)-timedelta(hours=self.last_modified_since)
+        self.cw_namespace = cw_namespace
+        self.cw_dimension_name = cw_dimension_name
+        self.cw_metric_name = 'BucketObjectsToCompareErrors'
 
     def run(self):
         global copy_queue
@@ -132,6 +213,7 @@ class CompareBucketObjects(threading.Thread):
             except:
                 logger.exception("Unhandeld exception occured.\n\
                 Put {} back to queue.".format(self.key,))
+                self.cw_put_error()
                 comparison_queue.put(self.key)
             else:
                 if self.src_cl != self.dst_cl:
@@ -144,13 +226,52 @@ class CompareBucketObjects(threading.Thread):
                     copy_queue.put(self.key)
                 comparison_queue.task_done()
 
+    def cw_put_error(self):
+        self.cw = self.aws_session.resource('cloudwatch')
+        self.statistic_value = 1
+        try:
+            float(self.statistic_value)
+        except ValueError:
+            logger.error("Statistic Value not convertibal to float")
+
+        try:
+            if self.statistic_value != 0:
+                cw.Metric(self.cw_namespace, self.cw_metric_name).put_data(
+                    MetricData=[
+                        {
+                            'MetricName': self.cw_metric_name,
+                            'Dimensions': [
+                                {
+                                    'Name': self.cw_dimension_name,
+                                    'Value': self.cw_metric_name
+                                }
+                            ],
+                            'StatisticValues': {
+                                'SampleCount': self.statistic_value,
+                                'Sum': self.statistic_value,
+                                'Minimum': self.statistic_value,
+                                'Maximum': self.statistic_value
+                            },
+                            'Unit': 'Count',
+                            'StorageResolution': 1
+                        }
+                    ]
+                )
+        except InvalidParameterValue:
+            logger.error("StatisticValue is not well formed or equal 0")
+        except:
+            logger.exception("")
+
 
 class TagDeletedKeys(threading.Thread):
-    def __init__(self, thread_number, aws_session, destination_bucket):
+    def __init__(self, thread_number, aws_session, destination_bucket, cw_namespace, cw_dimension_name):
         threading.Thread.__init__(self)
         self.thread_number = thread_number
         self.aws_session = aws_session
         self.destination_bucket = destination_bucket
+        self.cw_namespace = cw_namespace
+        self.cw_dimension_name = cw_dimension_name
+        self.cw_metric_name = 'BucketObjectsToTagAsDeletedErrors'
 
     def run(self):
         global deleted_keys_queue
@@ -178,6 +299,7 @@ class TagDeletedKeys(threading.Thread):
             except:
                 logger.exception("Unhandeld exception occured.\n\
                 Put {} back to queue.".format(self.key))
+                self.cw_put_error()
                 deleted_keys_queue.put(self.key)
 
             for self.tag_key in self.resp['TagSet']:
@@ -222,6 +344,42 @@ class TagDeletedKeys(threading.Thread):
                 deleted_keys_queue.task_done()
         deletion_count_queue.put(self.deleted_count)
         logger.debug("Thread {} as marked {} keys as deleted".format(thread_num, self.deleted_count))
+
+    def cw_put_error(self):
+        self.cw = self.aws_session.resource('cloudwatch')
+        self.statistic_value = 1
+        try:
+            float(self.statistic_value)
+        except ValueError:
+            logger.error("Statistic Value not convertibal to float")
+
+        try:
+            if self.statistic_value != 0:
+                cw.Metric(self.cw_namespace, self.cw_metric_name).put_data(
+                    MetricData=[
+                        {
+                            'MetricName': self.cw_metric_name,
+                            'Dimensions': [
+                                {
+                                    'Name': self.cw_dimension_name,
+                                    'Value': self.cw_metric_name
+                                }
+                            ],
+                            'StatisticValues': {
+                                'SampleCount': self.statistic_value,
+                                'Sum': self.statistic_value,
+                                'Minimum': self.statistic_value,
+                                'Maximum': self.statistic_value
+                            },
+                            'Unit': 'Count',
+                            'StorageResolution': 1
+                        }
+                    ]
+                )
+        except InvalidParameterValue:
+            logger.error("StatisticValue is not well formed or equal 0")
+        except:
+            logger.exception("")
 
 
 def get_s3_keys(aws_session, bucket, copy_num_objects=None):
@@ -348,7 +506,14 @@ if __name__ == '__main__':
             logger.info("Generating {} comparison threads.".format(thread_count))
             start = time.time()
             for thread_num in range(0, thread_count):
-                th.append(CompareBucketObjects(thread_num, aws_session, SOURCE_BUCKET, DESTINATION_BUCKET, LAST_MODIFIED_SINCE))
+                th.append(CompareBucketObjects(
+                    thread_num,
+                    aws_session,
+                    SOURCE_BUCKET,
+                    DESTINATION_BUCKET,
+                    cw_namespace,
+                    cw_dimension_name,
+                    LAST_MODIFIED_SINCE))
                 th[thread_num].daemon = True
                 th[thread_num].start()
 
@@ -399,12 +564,18 @@ if __name__ == '__main__':
             # Start copying S3 objects to destiantion bucket
             # Consume copy_queue until it is empty
             th = list()
-            logger.warning("{} ojects to copy.".format(copy_queue.qsize()))
+            logger.warning("{} ojects to copy.".format(copy_queue_size))
             logger.warning("Starting copy task.")
             logger.info("Generating {} copy threads.".format(thread_count))
             start = time.time()
             for thread_num in range(0, thread_count):
-                th.append(S3BackupRestore(thread_num, aws_session, SOURCE_BUCKET, DESTINATION_BUCKET))
+                th.append(S3BackupRestore(
+                    thread_num,
+                    aws_session,
+                    SOURCE_BUCKET,
+                    DESTINATION_BUCKET,
+                    cw_namespace,
+                    cw_dimension_name))
                 th[thread_num].daemon = True
                 th[thread_num].start()
             logger.info("Waiting for copy queue to be finished.")
@@ -474,7 +645,12 @@ if __name__ == '__main__':
                 logger.warning("Starting tagging of deleted objects.")
                 logger.info("Generating {} tagging thread(s).".format(thread_count))
                 for thread_num in range(0, thread_count):
-                    th.append(TagDeletedKeys(thread_num, aws_session, DESTINATION_BUCKET))
+                    th.append(TagDeletedKeys(
+                        thread_num,
+                        aws_session,
+                        DESTINATION_BUCKET,
+                        cw_namespace,
+                        cw_dimension_name))
                     th[thread_num].daemon = True
                     th[thread_num].start()
                 logger.info("Waiting for deleted keys queue to be finished.")
