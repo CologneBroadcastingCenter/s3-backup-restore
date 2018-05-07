@@ -97,7 +97,7 @@ elif VERBOSE and VERBOSE >= 3:
     logger.setLevel(logging.DEBUG)
 
 
-class S3BackupRestore(threading.Thread):
+class S3Backup(threading.Thread):
     def __init__(self, thread_number, aws_session, source_bucket, destination_bucket, cw_namespace, cw_dimension_name):
         threading.Thread.__init__(self)
         self.thread_number = thread_number
