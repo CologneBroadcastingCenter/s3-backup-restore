@@ -149,7 +149,7 @@ class S3Backup(threading.Thread):
 
         try:
             if self.statistic_value != 0:
-                cw.Metric(self.cw_namespace, self.cw_metric_name).put_data(
+                self.cw.Metric(self.cw_namespace, self.cw_metric_name).put_data(
                     MetricData=[
                         {
                             'MetricName': self.cw_metric_name,
@@ -236,7 +236,7 @@ class CompareBucketObjects(threading.Thread):
 
         try:
             if self.statistic_value != 0:
-                cw.Metric(self.cw_namespace, self.cw_metric_name).put_data(
+                self.cw.Metric(self.cw_namespace, self.cw_metric_name).put_data(
                     MetricData=[
                         {
                             'MetricName': self.cw_metric_name,
@@ -355,7 +355,7 @@ class TagDeletedKeys(threading.Thread):
 
         try:
             if self.statistic_value != 0:
-                cw.Metric(self.cw_namespace, self.cw_metric_name).put_data(
+                self.cw.Metric(self.cw_namespace, self.cw_metric_name).put_data(
                     MetricData=[
                         {
                             'MetricName': self.cw_metric_name,
@@ -569,7 +569,7 @@ if __name__ == '__main__':
             logger.info("Generating {} copy threads.".format(thread_count))
             start = time.time()
             for thread_num in range(0, thread_count):
-                th.append(S3BackupRestore(
+                th.append(S3Backup(
                     thread_num,
                     aws_session,
                     SOURCE_BUCKET,
