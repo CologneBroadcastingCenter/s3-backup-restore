@@ -33,50 +33,68 @@ parser.add_argument(
     '--source-bucket',
     '-s',
     help='Source Bucket to sync diff from.',
-    required=True)
+    required=True
+)
 parser.add_argument(
     '--destination-bucket',
     '-d',
     help='Destination Bucket to sync to.',
-    required=True)
+    required=True
+)
 parser.add_argument(
     '--prefix',
     default='',
-    help='Prefix to list objects from and to sync to.')
+    help='Prefix to list objects from and to sync to.'
+)
 parser.add_argument(
     '--last-modified-since',
     default=48,
     type=int,
     help='Compare bucket objects if they where modified since the last given hours. If so copy them to backup.',
     required=False,
-    metavar='N')
+    metavar='N'
+)
 parser.add_argument(
     '--tag-deleted',
     action='store_true',
-    help='Tag all objects that are deleted in source bucket but still present in backup bucket.')
+    help='Tag all objects that are deleted in source bucket but still present in backup bucket.'
+)
 parser.add_argument(
     '--thread-count',
     default=10,
     metavar='N',
     type=int,
-    help='Starting count for threads.')
+    help='Starting count for threads.'
+)
+parser.add_argument(
+    '--timeout',
+    default=30,
+    type=int,
+    metavar='s',
+    required=False,
+    help='Sets the timeout to finish each task before skipping.'
+)
 parser.add_argument(
     '--profile',
     '-p',
-    help='AWS profile name configure in aws config files.')
+    help='AWS profile name configure in aws config files.'
+)
 parser.add_argument(
     '--region',
     default='eu-central-1',
-    help='AWS Region')
+    help='AWS Region'
+)
 parser.add_argument(
     '--verbose', '-v',
-    action='count')
+    action='count'
+)
 parser.add_argument(
     '--copy-num-objects',
     help='[DEBUGGING] Number of objecst to copy.',
     required=False,
     type=int,
-    metavar='N')
+    metavar='N'
+)
 cmd_args = parser.parse_args()
 
 PROFILE = cmd_args.profile
@@ -85,6 +103,7 @@ DESTINATION_BUCKET = cmd_args.destination_bucket
 LAST_MODIFIED_SINCE = cmd_args.last_modified_since
 TAG_DELETED = cmd_args.tag_deleted
 THREAD_COUNT = cmd_args.thread_count
+TIMEOUT = cmd_args.timeout
 AWS_REGION = cmd_args.region
 VERBOSE = cmd_args.verbose
 COPY_NUM_OBJECTS = cmd_args.copy_num_objects
@@ -98,12 +117,13 @@ elif VERBOSE and VERBOSE >= 3:
 
 
 class S3Backup(threading.Thread):
-    def __init__(self, thread_number, aws_session, source_bucket, destination_bucket, cw_namespace, cw_dimension_name):
+    def __init__(self, thread_number, aws_session, source_bucket, destination_bucket, cw_namespace, cw_dimension_name, timeout=30):
         threading.Thread.__init__(self)
         self.thread_number = thread_number
         self.aws_session = aws_session
         self.source_bucket = source_bucket
         self.destination_bucket = destination_bucket
+        self.timeout = timeout
         self.transfere_config = boto3.s3.transfer.TransferConfig(
             use_threads=True,
             max_concurrency=10
@@ -117,7 +137,7 @@ class S3Backup(threading.Thread):
         self.s3 = self.aws_session.resource('s3')
 
         while not copy_queue.empty():
-            self.key = copy_queue.get()
+            self.key = copy_queue.get(timeout=self.timeout)
 
             # Preparing copy task
             self.dest_obj = self.s3.Object(self.destination_bucket, self.key)
@@ -177,12 +197,13 @@ class S3Backup(threading.Thread):
 
 
 class CompareBucketObjects(threading.Thread):
-    def __init__(self, thread_number, aws_session, source_bucket, dest_bucket, cw_namespace, cw_dimension_name, last_modified_since=48):
+    def __init__(self, thread_number, aws_session, source_bucket, dest_bucket, cw_namespace, cw_dimension_name, timeout=30, last_modified_since=48):
         threading.Thread.__init__(self)
         self.thread_number = thread_number
         self.aws_session = aws_session
         self.source_bucket = source_bucket
         self.dest_bucket = dest_bucket
+        self.timeout = timeout
         self.last_modified_since = last_modified_since
         self.time_obj = datetime.now(timezone.utc)-timedelta(hours=self.last_modified_since)
         self.cw_namespace = cw_namespace
@@ -197,7 +218,7 @@ class CompareBucketObjects(threading.Thread):
         except:
             logger.exception("")
         while not comparison_queue.empty():
-            self.key = comparison_queue.get()
+            self.key = comparison_queue.get(timeout=self.timeout)
 
             try:
                 self.src_lm = self.s3.Object(self.source_bucket, self.key).last_modified
@@ -264,11 +285,12 @@ class CompareBucketObjects(threading.Thread):
 
 
 class TagDeletedKeys(threading.Thread):
-    def __init__(self, thread_number, aws_session, destination_bucket, cw_namespace, cw_dimension_name):
+    def __init__(self, thread_number, aws_session, destination_bucket, cw_namespace, cw_dimension_name, timeout=30):
         threading.Thread.__init__(self)
         self.thread_number = thread_number
         self.aws_session = aws_session
         self.destination_bucket = destination_bucket
+        self.timeout = timeout
         self.cw_namespace = cw_namespace
         self.cw_dimension_name = cw_dimension_name
         self.cw_metric_name = 'BucketObjectsToTagAsDeletedErrors'
@@ -280,7 +302,7 @@ class TagDeletedKeys(threading.Thread):
         self.deleted_count = 0
 
         while not deleted_keys_queue.empty():
-            self.key = deleted_keys_queue.get()
+            self.key = deleted_keys_queue.get(timeout=self.timeout)
             self.deleted_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
             self.deleted = True
             self.deleted_at = True
@@ -513,6 +535,7 @@ if __name__ == '__main__':
                     DESTINATION_BUCKET,
                     cw_namespace,
                     cw_dimension_name,
+                    TIMEOUT,
                     LAST_MODIFIED_SINCE))
                 th[thread_num].daemon = True
                 th[thread_num].start()
@@ -546,7 +569,7 @@ if __name__ == '__main__':
                     logger.warning("Exiting...")
                     sys.exit(127)
                 else:
-                    th[i].join()
+                    th[i].join(timeout=TIMEOUT)
                     logger.info("Comparison thread {} finished.".format(i))
             logger.warning("Comparison of objects took {} seconds".format(round(time.time()-start)))
 
@@ -575,7 +598,8 @@ if __name__ == '__main__':
                     SOURCE_BUCKET,
                     DESTINATION_BUCKET,
                     cw_namespace,
-                    cw_dimension_name))
+                    cw_dimension_name,
+                    TIMEOUT))
                 th[thread_num].daemon = True
                 th[thread_num].start()
             logger.info("Waiting for copy queue to be finished.")
@@ -607,7 +631,7 @@ if __name__ == '__main__':
                     logger.warning("Exiting...")
                     sys.exit(127)
                 else:
-                    th[i].join()
+                    th[i].join(timeout=TIMEOUT)
                     logger.info("Copy thread number {} finished.".format(i))
             logger.warning("Copy task finished.")
         else:
@@ -650,7 +674,8 @@ if __name__ == '__main__':
                         aws_session,
                         DESTINATION_BUCKET,
                         cw_namespace,
-                        cw_dimension_name))
+                        cw_dimension_name,
+                        TIMEOUT))
                     th[thread_num].daemon = True
                     th[thread_num].start()
                 logger.info("Waiting for deleted keys queue to be finished.")
@@ -682,13 +707,13 @@ if __name__ == '__main__':
                         logger.warning("Exiting...")
                         sys.exit(127)
                     else:
-                        th[i].join()
+                        th[i].join(timeout=300)
                         logger.info("Tagging thread number {} finished.".format(i))
                 logger.warning("Tagging of deleted objects finished.")
             sum_deleted = 0
             while not deletion_count_queue.empty():
                 try:
-                    sum_deleted += int(deletion_count_queue.get())
+                    sum_deleted += int(deletion_count_queue.get(timeout=TIMEOUT))
                 except:
                     logger.exception("")
                 else:
