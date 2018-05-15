@@ -1,11 +1,13 @@
-import boto3
+#!/usr/bin/env python3
+
 import argparse
+import boto3
 import logging
+import os
 import queue
 import sys
 import threading
 import time
-import os
 from datetime import datetime, timedelta, timezone
 from botocore.exceptions import ClientError, ParamValidationError
 
@@ -137,7 +139,10 @@ class S3Backup(threading.Thread):
         self.s3 = self.aws_session.resource('s3')
 
         while not copy_queue.empty():
-            self.key = copy_queue.get(timeout=self.timeout)
+            try:
+                self.key = copy_queue.get(timeout=self.timeout)
+            except queue.Empty as exc:
+                continue
 
             # Preparing copy task
             self.dest_obj = self.s3.Object(self.destination_bucket, self.key)
@@ -218,7 +223,10 @@ class CompareBucketObjects(threading.Thread):
         except:
             logger.exception("")
         while not comparison_queue.empty():
-            self.key = comparison_queue.get(timeout=self.timeout)
+            try:
+                self.key = comparison_queue.get(timeout=self.timeout)
+            except queue.Empty as exc:
+                continue
 
             try:
                 self.src_lm = self.s3.Object(self.source_bucket, self.key).last_modified
@@ -302,7 +310,10 @@ class TagDeletedKeys(threading.Thread):
         self.deleted_count = 0
 
         while not deleted_keys_queue.empty():
-            self.key = deleted_keys_queue.get(timeout=self.timeout)
+            try:
+                self.key = deleted_keys_queue.get(timeout=self.timeout)
+            except queue.Empty as exc:
+                continue
             self.deleted_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
             self.deleted = True
             self.deleted_at = True
@@ -710,14 +721,6 @@ if __name__ == '__main__':
                         th[i].join(timeout=300)
                         logger.info("Tagging thread number {} finished.".format(i))
                 logger.warning("Tagging of deleted objects finished.")
-            sum_deleted = 0
-            while not deletion_count_queue.empty():
-                try:
-                    sum_deleted += int(deletion_count_queue.get(timeout=TIMEOUT))
-                except:
-                    logger.exception("")
-                else:
-                    deletion_count_queue.task_done()
-            logger.info("{} keys marked as deleted.".format(sum_deleted))
+
             cw_put_queue_count(aws_session, cw_namespace, 'BucketObjectsMarkedAsDeleted', cw_dimension_name, deleted_keys_size)
             logger.warning("Tagging of objects took {} seconds".format(round(time.time()-start)))
