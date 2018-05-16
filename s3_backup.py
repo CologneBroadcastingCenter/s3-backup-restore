@@ -503,7 +503,7 @@ if __name__ == '__main__':
         logger.debug("List S3 Keys from {}".format(SOURCE_BUCKET))
         source_bucket_keys = get_s3_keys(aws_session, SOURCE_BUCKET, copy_num_objects=COPY_NUM_OBJECTS)
 
-        # Getting S3 keys from source bucket
+        # Getting S3 keys from destiantion bucket
         logger.debug("List S3 Keys from {}".format(DESTINATION_BUCKET))
         dest_bucket_keys = get_s3_keys(aws_session, DESTINATION_BUCKET)
 
