@@ -225,7 +225,7 @@ class MpTagDeletedObjects(multiprocessing.Process):
 
             try:
                 while not self.tag_queue.empty():
-                        time.sleep(15)
+                        time.sleep(1)
             except KeyboardInterrupt:
                 logger.info("Exiting...")
                 sys.exit(127)
@@ -238,7 +238,7 @@ class MpTagDeletedObjects(multiprocessing.Process):
                              .format(self.name, th_lst[t].name))
                 try:
                     while th_lst[t].is_alive():
-                        time.sleep(15)
+                        time.sleep(1)
                 except KeyboardInterrupt:
                     logger.warning("Exiting...")
                     sys.exit(127)

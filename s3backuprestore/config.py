@@ -114,13 +114,11 @@ class Config(object):
             session = boto3.session.Session(
                 aws_access_key_id=self._access_key,
                 aws_secret_access_key=self._secret_key,
-                aws_session_token=self._token
-                )
+                aws_session_token=self._token)
         elif self._profile_name:
             session = boto3.session.Session(
                 profile_name=self._profile_name,
-                region_name=self._region
-                )
+                region_name=self._region)
             frz_creds = session.get_credentials().get_frozen_credentials()
         else:
             session = boto3.session.Session(region_name=self._region)
