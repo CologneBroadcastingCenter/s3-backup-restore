@@ -38,7 +38,7 @@ def get_objects(bucket, config=None, objects_count=None):
             keys.append(key.key)
 
             if time.time() - 1 > start:
-                logger.info("Received objects till now {}.".format(len(keys)))
+                logger.info("Received {} objects.".format(len(keys)))
                 start = time.time()
             # Break condition to escape earlier thant complete bucket listing
             if objects_count and len(keys) >= objects_count:
