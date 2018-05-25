@@ -53,7 +53,7 @@ class Backup(threading.Thread):
                                        .format(waiter))
                         put_metric('SlowDown', 1, self.config)
                     else:
-                        logger.error(exc.response)
+                        logger.error("{}\n Key {}".format(exc.response, key))
                         put_metric(self.cw_metric_name, 1, self.config)
                 except KeyError as exc:
                     if "reached max retries" in str(exc.__context__):
@@ -64,12 +64,12 @@ class Backup(threading.Thread):
                     put_metric(self.cw_metric_name, 1, self.config)
                     time.sleep(waiter)
                     # Increase waiting time
-                    waiter *= 4
+                    waiter = min(90, waiter * 4)
                 else:
                     self.copy_queue.put(key)
                     time.sleep(waiter)
                     # Increase waiting time
-                    waiter *= 4
+                    waiter = min(90, waiter * 4)
             except ConnectionRefusedError as exc:
                 logger.exception("Waiting for {:.0f}s.\n"
                                  "Put {} back to queue.\n"
@@ -78,7 +78,7 @@ class Backup(threading.Thread):
                 put_metric(self.cw_metric_name, 1, self.config)
                 self.copy_queue.put(key)
                 time.sleep(waiter)
-                waiter *= 4
+                waiter = min(90, waiter * 4)
             except EndpointConnectionError as exc:
                 logger.warning("EndpointConnectionError.\n"
                                "Waiting for {:.0f}s.\n"
@@ -87,7 +87,7 @@ class Backup(threading.Thread):
                 put_metric(self.cw_metric_name, 1, self.config)
                 self.copy_queue.put(key)
                 time.sleep(waiter)
-                waiter *= 4
+                waiter = min(90, waiter * 4)
             except:
                 logger.exception("Unhandeld exception occured.\n"
                                  "Put {} back to queue.".format(key))
@@ -95,7 +95,7 @@ class Backup(threading.Thread):
                 self.copy_queue.put(key)
                 time.sleep(waiter)
                 # Increase waiting time
-                waiter *= 4
+                waiter = min(90, waiter * 4)
             else:
                 self.copy_queue.task_done()
                 # Reduce waiting time
@@ -135,7 +135,7 @@ class MpBackup(multiprocessing.Process):
 
             try:
                 while not self.copy_queue.empty():
-                        time.sleep(15)
+                        time.sleep(1)
             except KeyboardInterrupt:
                 logger.info("Exiting...")
                 sys.exit(127)
@@ -148,7 +148,7 @@ class MpBackup(multiprocessing.Process):
                              .format(self.name, th_lst[t].name))
                 try:
                     while th_lst[t].is_alive():
-                        time.sleep(15)
+                        time.sleep(1)
                 except KeyboardInterrupt:
                     logger.warning("Exiting...")
                     sys.exit(127)
