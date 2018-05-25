@@ -2,18 +2,20 @@
 
 import sys as sys
 import time as time
+from random import shuffle
 
 from .config import Config
 from .log import logger
 
 
-def get_objects(bucket, config=None, objects_count=None):
+def get_objects(bucket, config=None, shuffle_list=True, objects_count=None):
     """Returns objects from bucket and returns them as a list
 
     Args:
         bucket (string): S3 bucket.
         config (Config, optional): Defaults to None.
         Configuration object.
+        shuffle_list (boolean): Returnes a shuffled S3 keys list.
         objects_count ([int], optional): Defaults to None.
                                          Amount of keys to return.
 
@@ -49,6 +51,8 @@ def get_objects(bucket, config=None, objects_count=None):
         logger.exception("")
         sys.exit(127)
     else:
+        if shuffle_list:
+            shuffle(keys)
         return keys
 
 
