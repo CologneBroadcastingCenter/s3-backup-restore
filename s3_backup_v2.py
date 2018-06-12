@@ -79,6 +79,12 @@ if __name__ == '__main__':
     except RuntimeError:
         logger.warning("Context already set to 'spawn'.")
 
+    trans_conf = {
+        'multipart_threshold': 52428800,
+        'multipart_chunksize': 26214400,
+        'num_download_attempts': 10,
+    }
+
     # Getting configuration object for backup processes.
     backup_config = s3br.config.Config(
         SRC_BUCKET,
@@ -87,7 +93,8 @@ if __name__ == '__main__':
         last_modified=LAST_MODIFIED_SINCE,
         cw_dimension_name=cw_dimension_name,
         profile_name=PROFILE,
-        region=REGION)
+        region=REGION,
+        s3_transfer_manager_conf=trans_conf)
 
     # Getting S3 objects from source bucket
     logger.info("List S3 Keys from {}".format(SRC_BUCKET))
@@ -98,21 +105,27 @@ if __name__ == '__main__':
     logger.info("{} objects in {}.".format(len(src_obj), SRC_BUCKET))
     logger.debug("Objects: {}".format(src_obj))
 
-    # Getting S3 keys from destiantion bucket
-    logger.debug("List S3 Keys from {}".format(DST_BUCKET))
-    dst_obj = s3br.get_objects(
-        DST_BUCKET,
-        config=backup_config)
-    logger.info("{} in {}.".format(len(dst_obj), DST_BUCKET))
-    logger.debug("Objects: {}".format(dst_obj))
+    if ALL:
+        # Getting objects not in destination bucket
+        [cp_q.put(o) for o in src_obj]
+        logger.info("{} objects to copy bucket.".format(cp_q.qsize()))
+        logger.debug("Objects: {}".format(src_obj))
+    else:
+        # Getting S3 keys from destiantion bucket
+        logger.debug("List S3 Keys from {}".format(DST_BUCKET))
+        dst_obj = s3br.get_objects(
+            DST_BUCKET,
+            config=backup_config)
+        logger.info("{} in {}.".format(len(dst_obj), DST_BUCKET))
+        logger.debug("Objects: {}".format(dst_obj))
 
-    # Getting objects not in destination bucket
-    cp_obj = set(src_obj) - set(dst_obj)
-    [cp_q.put(o) for o in cp_obj]
-    logger.info("{} objects not in destination bucket.".format(cp_q.qsize()))
-    logger.debug("Objects: {}".format(cp_obj))
+        # Getting objects not in destination bucket
+        cp_obj = set(src_obj) - set(dst_obj)
+        [cp_q.put(o) for o in cp_obj]
+        logger.info("{} objects not in destination bucket."
+                    .format(cp_q.qsize()))
+        logger.debug("Objects: {}".format(cp_obj))
 
-    if not ALL:
         # Getting objects to compare between source and destination
         cmp_obj = set(src_obj) & set(dst_obj)
         [cmp_q.put(o) for o in cmp_obj]
@@ -129,20 +142,21 @@ if __name__ == '__main__':
         # Check if there are any objects to compare.
         if cmp_q_size:
             start = time.time()
+            processes = min(cmp_q_size, CPU_COUNT)
             # Starting compare processes
             proc_lst = list()
-            logger.info("Starting {} compare processes.".format(CPU_COUNT))
-            for p in range(CPU_COUNT):
+            logger.info("Starting {} compare processes.".format(processes))
+            for p in range(processes):
                 proc_lst.append(s3br.MpCompare(
                     config=backup_config,
                     compare_queue=cmp_q,
                     copy_queue=cp_q,
                 ))
                 proc_lst[p].start()
-            logger.info("{} compare processes are started.".format(CPU_COUNT))
+            logger.info("{} compare processes are started.".format(processes))
 
             logger.info("Waiting for compare proccesses to be finished.")
-            for p in range(CPU_COUNT):
+            for p in range(processes):
                 try:
                     while proc_lst[p].is_alive():
                         logger.debug("{} still alive waiting 1s."
@@ -176,19 +190,20 @@ if __name__ == '__main__':
     if cp_q_size:
         start = time.time()
         # Starting compare process
+        processes = min(cp_q_size, CPU_COUNT)
         proc_lst = list()
-        logger.info("Starting {} backup processes.".format(CPU_COUNT))
-        for p in range(CPU_COUNT):
+        logger.info("Starting {} backup processes.".format(processes))
+        for p in range(processes):
             proc_lst.append(s3br.MpBackup(
                 config=backup_config,
                 copy_queue=cp_q,
                 thread_count=25
             ))
             proc_lst[p].start()
-        logger.info("{} backup processes are started.".format(CPU_COUNT))
+        logger.info("{} backup processes are started.".format(processes))
 
         logger.info("Waiting for backup proccesses to be finished.")
-        for p in range(CPU_COUNT):
+        for p in range(processes):
             try:
                 while proc_lst[p].is_alive():
                     logger.debug("{} still alive waiting 1s."
@@ -227,19 +242,20 @@ if __name__ == '__main__':
                     .format(tag_q_size))
         if tag_q_size:
             # Starting compare process
+            processes = min(tag_q_size, CPU_COUNT)
             proc_lst = list()
             logger.info("Starting {} tag as deleted processes."
-                        .format(CPU_COUNT))
-            for p in range(CPU_COUNT):
+                        .format(processes))
+            for p in range(processes):
                 proc_lst.append(s3br.MpTagDeletedObjects(
                     config=backup_config,
                     tag_queue=tag_q
                 ))
                 proc_lst[p].start()
-            logger.info("{} tagging processes are started.".format(CPU_COUNT))
+            logger.info("{} tagging processes are started.".format(processes))
 
             logger.info("Waiting for tagging proccesses to be finished.")
-            for p in range(CPU_COUNT):
+            for p in range(processes):
                 try:
                     while proc_lst[p].is_alive():
                         logger.debug("{} still alive waiting 1s."

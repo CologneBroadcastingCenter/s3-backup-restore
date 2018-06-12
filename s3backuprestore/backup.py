@@ -23,6 +23,7 @@ class Backup(threading.Thread):
         self.copy_queue = copy_queue
         self.daemon = True
         self._session = config.boto3_session()
+        self._transfer_mgr = config.s3_transfer_manager()
 
     def run(self):
         waiter = 1
@@ -41,25 +42,35 @@ class Backup(threading.Thread):
 
             # Preparing copy task
             dst_obj = s3.Object(self.dst_bucket, key)
-            logger.info("{} copying {}".format(self.name, key))
             try:
                 cp_src = {'Bucket': self.src_bucket, 'Key': key}
-                dst_obj.copy(cp_src)
+                logger.info("{} copying {}".format(self.name, key))
+                dst_obj.copy(
+                    cp_src,
+                    Config=self._transfer_mgr)
             except ClientError as exc:
                 try:
                     error_code = exc.response['Error']['Code']
                     if 'SlowDown' in error_code:
                         logger.warning("SlowDown occurs. Waiting for {:.0f}s"
                                        .format(waiter))
+                        logger.debug("{}\n Key {}".format(exc.response, key))
                         put_metric('SlowDown', 1, self.config)
+                    elif 'InternalError' in error_code:
+                        logger.warning("InternalError occurs. Waiting for "
+                                       "{:.0f}s".format(waiter))
+                        put_metric('InternalServerError', 1, self.config)
+                        logger.debug("{}\n Key {}".format(exc.response, key))
                     else:
                         logger.error("{}\n Key {}".format(exc.response, key))
                         put_metric(self.cw_metric_name, 1, self.config)
                 except KeyError as exc:
                     if "reached max retries" in str(exc.__context__):
                         logger.warning("Max retries reached.")
+                        logger.debug(exc.__context__)
                     else:
                         logger.exception("No Error Code in exception response")
+                        logger.debug(exc)
                     self.copy_queue.put(key)
                     put_metric(self.cw_metric_name, 1, self.config)
                     time.sleep(waiter)
@@ -98,6 +109,7 @@ class Backup(threading.Thread):
                 waiter = min(90, waiter * 4)
             else:
                 self.copy_queue.task_done()
+                logger.info("{} copied {}".format(self.name, key))
                 # Reduce waiting time
                 waiter = max(1, waiter * 0.80)
 

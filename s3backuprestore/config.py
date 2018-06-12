@@ -1,11 +1,12 @@
 import boto3
+from boto3.s3.transfer import TransferConfig
 
 
 class Config(object):
     def __init__(self, src_bucket, dst_bucket, access_key=None,
                  secret_key=None, token=None, timeout=None, last_modified=None,
                  cw_namespace=None, cw_dimension_name=None, profile_name=None,
-                 region=None):
+                 region=None, s3_transfer_manager_conf=None):
         self._access_key = access_key
         self._secret_key = secret_key
         self._token = token
@@ -17,6 +18,7 @@ class Config(object):
         self._cw_dimension_name = cw_dimension_name or 'Dev'
         self._profile_name = profile_name
         self._region = region or 'eu-central-1'
+        self._s3_transfer_manager_conf = s3_transfer_manager_conf
 
     @property
     def access_key(self):
@@ -107,6 +109,22 @@ class Config(object):
     @cw_dimension_name.setter
     def cw_dimension_name(self, cw_dimension_name):
         self._cw_dimension_name = cw_dimension_name
+
+    @property
+    def s3_transfer_manager_conf(self):
+        return self._s3_transfer_manager_conf
+
+    @s3_transfer_manager_conf.setter
+    def s3_transfer_manager_conf(self, **kwargs):
+        self._s3_transfer_manager_conf = kwargs
+
+    def s3_transfer_manager(self):
+        if self._s3_transfer_manager_conf:
+            conf = TransferConfig(**self._s3_transfer_manager_conf)
+        else:
+            conf = TransferConfig()
+
+        return conf
 
     def boto3_session(self):
         frz_creds = None
