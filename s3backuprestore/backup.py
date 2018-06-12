@@ -3,6 +3,7 @@ import queue
 import sys
 import threading
 import time
+from random import randint
 from botocore.exceptions import ClientError, EndpointConnectionError
 
 from .cw import put_metric
@@ -10,7 +11,7 @@ from .log import logger
 
 
 class Backup(threading.Thread):
-    def __init__(self, config, copy_queue,
+    def __init__(self, config, copy_queue, max_wait=300,
                  cw_metric_name='BackupObjectsErrors'):
         threading.Thread.__init__(self)
         self.config = config
@@ -21,6 +22,7 @@ class Backup(threading.Thread):
         self.cw_dimension_name = self.config.cw_dimension_name
         self.cw_metric_name = cw_metric_name
         self.copy_queue = copy_queue
+        self.max_wait = max_wait
         self.daemon = True
         self._session = config.boto3_session()
         self._transfer_mgr = config.s3_transfer_manager()
@@ -75,12 +77,12 @@ class Backup(threading.Thread):
                     put_metric(self.cw_metric_name, 1, self.config)
                     time.sleep(waiter)
                     # Increase waiting time
-                    waiter = min(90, waiter * 4)
+                    waiter = randint(0, min(self.max_wait, waiter * 4))
                 else:
                     self.copy_queue.put(key)
                     time.sleep(waiter)
                     # Increase waiting time
-                    waiter = min(90, waiter * 4)
+                    waiter = randint(0, min(self.max_wait, waiter * 4))
             except ConnectionRefusedError as exc:
                 logger.exception("Waiting for {:.0f}s.\n"
                                  "Put {} back to queue.\n"
@@ -89,7 +91,7 @@ class Backup(threading.Thread):
                 put_metric(self.cw_metric_name, 1, self.config)
                 self.copy_queue.put(key)
                 time.sleep(waiter)
-                waiter = min(90, waiter * 4)
+                waiter = randint(0, min(self.max_wait, waiter * 4))
             except EndpointConnectionError as exc:
                 logger.warning("EndpointConnectionError.\n"
                                "Waiting for {:.0f}s.\n"
@@ -98,7 +100,7 @@ class Backup(threading.Thread):
                 put_metric(self.cw_metric_name, 1, self.config)
                 self.copy_queue.put(key)
                 time.sleep(waiter)
-                waiter = min(90, waiter * 4)
+                waiter = randint(0, min(self.max_wait, waiter * 4))
             except:
                 logger.exception("Unhandeld exception occured.\n"
                                  "Put {} back to queue.".format(key))
@@ -106,12 +108,12 @@ class Backup(threading.Thread):
                 self.copy_queue.put(key)
                 time.sleep(waiter)
                 # Increase waiting time
-                waiter = min(90, waiter * 4)
+                waiter = randint(0, min(self.max_wait, waiter * 4))
             else:
                 self.copy_queue.task_done()
                 logger.info("{} copied {}".format(self.name, key))
                 # Reduce waiting time
-                waiter = max(1, waiter * 0.80)
+                waiter = randint(0, min(self.max_wait, waiter * 4))
 
 
 class MpBackup(multiprocessing.Process):
