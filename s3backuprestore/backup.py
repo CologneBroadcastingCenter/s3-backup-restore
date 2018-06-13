@@ -44,8 +44,8 @@ class Backup(threading.Thread):
 
             # Preparing copy task
             dst_obj = s3.Object(self.dst_bucket, key)
+            cp_src = {'Bucket': self.src_bucket, 'Key': key}
             try:
-                cp_src = {'Bucket': self.src_bucket, 'Key': key}
                 logger.info("{} copying {}".format(self.name, key))
                 dst_obj.copy(
                     cp_src,
@@ -149,7 +149,7 @@ class MpBackup(multiprocessing.Process):
 
             try:
                 while not self.copy_queue.empty():
-                        time.sleep(1)
+                    time.sleep(1)
             except KeyboardInterrupt:
                 logger.info("Exiting...")
                 sys.exit(127)
