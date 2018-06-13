@@ -3,7 +3,6 @@
 import argparse
 import logging
 import multiprocessing as mp
-import os
 import sys
 import time
 
@@ -13,11 +12,6 @@ import s3backuprestore as s3br
 cmp_q = mp.JoinableQueue()
 cp_q = mp.JoinableQueue()
 tag_q = mp.JoinableQueue()
-
-try:
-    cw_dimension_name = os.environ['AWSBatchComputeEnvName']
-except KeyError:
-    cw_dimension_name = None
 
 logging.basicConfig(
     level=logging.ERROR,
@@ -58,6 +52,7 @@ TAG_DELETED = cmd_args.tag_deleted
 THREAD_COUNT = cmd_args.thread_count
 TIMEOUT = cmd_args.timeout
 VERBOSE = cmd_args.verbose
+CW_DIMENSION_NAME = cmd_args.cloudwatch_dimension_name
 
 if VERBOSE and VERBOSE == 1:
     logger.setLevel(logging.WARNING)
@@ -91,7 +86,7 @@ if __name__ == '__main__':
         DST_BUCKET,
         timeout=TIMEOUT,
         last_modified=LAST_MODIFIED_SINCE,
-        cw_dimension_name=cw_dimension_name,
+        cw_dimension_name=CW_DIMENSION_NAME,
         profile_name=PROFILE,
         region=REGION,
         s3_transfer_manager_conf=trans_conf)

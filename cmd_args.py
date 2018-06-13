@@ -53,6 +53,11 @@ parser.add_argument(
     help="AWS Region"
 )
 parser.add_argument(
+    '--cloudwatch-dimension-name',
+    default='Dev',
+    help='Cloudwatch Dimension name to use to publish metrics to.'
+)
+parser.add_argument(
     '--verbose', '-v',
     action='count'
 )
