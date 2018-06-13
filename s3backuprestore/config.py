@@ -127,7 +127,6 @@ class Config(object):
         return conf
 
     def boto3_session(self):
-        frz_creds = None
         if self._access_key and self._secret_key and self._token:
             session = boto3.session.Session(
                 aws_access_key_id=self._access_key,
@@ -137,22 +136,20 @@ class Config(object):
             session = boto3.session.Session(
                 profile_name=self._profile_name,
                 region_name=self._region)
-            frz_creds = session.get_credentials().get_frozen_credentials()
         else:
             session = boto3.session.Session(region_name=self._region)
-            frz_creds = session.get_credentials().get_frozen_credentials()
 
-        if frz_creds:
-            self._access_key = frz_creds.access_key
-            self._secret_key = frz_creds.secret_key
-            self._token = frz_creds.token
+        creds = session.get_credentials()
+        self._access_key = creds.access_key
+        self._secret_key = creds.secret_key
+        self._token = creds.token
 
         return session
 
     def get_credentials(self):
         session = self.boto3_session()
-        frz_creds = session.get_credentials().get_frozen_credentials()
-        self._access_key = frz_creds.access_key
-        self._secret_key = frz_creds.secret_key
-        self._token = frz_creds.token
-        return frz_creds
+        creds = session.get_credentials()
+        self._access_key = creds.access_key
+        self._secret_key = creds.secret_key
+        self._token = creds.token
+        return creds
