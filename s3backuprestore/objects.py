@@ -39,7 +39,7 @@ def get_objects(bucket, config=None, shuffle_list=True, objects_count=None):
         for key in session.resource('s3').Bucket(bucket).objects.all():
             keys.append(key.key)
 
-            if time.time() - 1 > start:
+            if time.time() - 30 > start:
                 logger.info("Received {} objects.".format(len(keys)))
                 start = time.time()
             # Break condition to escape earlier thant complete bucket listing

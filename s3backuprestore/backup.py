@@ -37,9 +37,13 @@ class Backup(threading.Thread):
             sys.exit(127)
 
         while not self.copy_queue.empty():
+            logger.debug("Copy queue size: {} keys"
+                         .format(self.copy_queue.qsize()))
             try:
                 key = self.copy_queue.get(timeout=self.timeout)
+                logger.info("Got key {} from copy queue.".format(key))
             except queue.Empty as exc:
+                logger.warning("Copy queue seems empty. Checking again.")
                 continue
 
             # Preparing copy task
@@ -47,9 +51,7 @@ class Backup(threading.Thread):
             cp_src = {'Bucket': self.src_bucket, 'Key': key}
             try:
                 logger.info("{} copying {}".format(self.name, key))
-                dst_obj.copy(
-                    cp_src,
-                    Config=self._transfer_mgr)
+                dst_obj.copy(cp_src, Config=self._transfer_mgr)
             except ClientError as exc:
                 try:
                     error_code = exc.response['Error']['Code']
@@ -61,7 +63,7 @@ class Backup(threading.Thread):
                     elif 'InternalError' in error_code:
                         logger.warning("InternalError occurs. Waiting for "
                                        "{:.0f}s".format(waiter))
-                        put_metric('InternalServerError', 1, self.config)
+                        put_metric(self.cw_metric_name, 1, self.config)
                         logger.debug("{}\n Key {}".format(exc.response, key))
                     else:
                         logger.error("{}\n Key {}".format(exc.response, key))
@@ -71,49 +73,61 @@ class Backup(threading.Thread):
                         logger.warning("Max retries reached.")
                         logger.debug(exc.__context__)
                     else:
-                        logger.exception("No Error Code in exception response")
-                        logger.debug(exc)
-                    self.copy_queue.put(key)
+                        logger.exception("No Errcode in exception response.")
+                        logger.debug(exc.__context__)
+                    self.copy_queue.put(key, timeout=self.timeout)
                     put_metric(self.cw_metric_name, 1, self.config)
+                    logger.debug("Error occured sleeping for {}s."
+                                 .format(waiter))
                     time.sleep(waiter)
                     # Increase waiting time
-                    waiter = randint(0, min(self.max_wait, waiter * 4))
+                    waiter = randint(1, min(self.max_wait, waiter * 4))
+                    logger.debug("Next waiting time {}s.".format(waiter))
                 else:
-                    self.copy_queue.put(key)
+                    logger.error("Put {} back to queue.".format(key))
+                    self.copy_queue.put(key, timeout=self.timeout)
+                    logger.debug("Error occured sleeping for {}s."
+                                 .format(waiter))
                     time.sleep(waiter)
                     # Increase waiting time
-                    waiter = randint(0, min(self.max_wait, waiter * 4))
+                    waiter = randint(1, min(self.max_wait, waiter * 4))
+                    logger.debug("Next waiting time {}s.".format(waiter))
             except ConnectionRefusedError as exc:
                 logger.exception("Waiting for {:.0f}s.\n"
                                  "Put {} back to queue.\n"
                                  "Maybe to many connections?"
                                  .format(waiter, key))
                 put_metric(self.cw_metric_name, 1, self.config)
-                self.copy_queue.put(key)
+                self.copy_queue.put(key, timeout=self.timeout)
+                logger.debug("Error occured sleeping for {}s.".format(waiter))
                 time.sleep(waiter)
-                waiter = randint(0, min(self.max_wait, waiter * 4))
+                waiter = randint(1, min(self.max_wait, waiter * 4))
+                logger.debug("Next waiting time {}s.".format(waiter))
             except EndpointConnectionError as exc:
                 logger.warning("EndpointConnectionError.\n"
                                "Waiting for {:.0f}s.\n"
                                "Put {} back to queue.\n"
                                .format(waiter, key))
                 put_metric(self.cw_metric_name, 1, self.config)
-                self.copy_queue.put(key)
+                self.copy_queue.put(key, timeout=self.timeout)
+                logger.debug("Error occured sleeping for {}s.".format(waiter))
                 time.sleep(waiter)
-                waiter = randint(0, min(self.max_wait, waiter * 4))
+                waiter = randint(1, min(self.max_wait, waiter * 4))
+                logger.debug("Next waiting time {}s.".format(waiter))
             except:
-                logger.exception("Unhandeld exception occured.\n"
-                                 "Put {} back to queue.".format(key))
+                logger.exception("Unhandeld exception occured.\n \
+                                 Put {} back to queue.".format(key))
                 put_metric(self.cw_metric_name, 1, self.config)
-                self.copy_queue.put(key)
+                self.copy_queue.put(key, timeout=self.timeout)
+                logger.debug("Error occured sleeping for {}s.".format(waiter))
                 time.sleep(waiter)
-                # Increase waiting time
-                waiter = randint(0, min(self.max_wait, waiter * 4))
+                waiter = randint(1, min(self.max_wait, waiter * 4))
+                logger.debug("Next waiting time {}s.".format(waiter))
             else:
-                self.copy_queue.task_done()
                 logger.info("{} copied {}".format(self.name, key))
                 # Reduce waiting time
-                waiter = randint(0, min(self.max_wait, waiter * 4))
+                waiter = max(round(waiter * 0.8), 1)
+                logger.debug("Reduced waiting time to {}s.".format(waiter))
 
 
 class MpBackup(multiprocessing.Process):
@@ -128,11 +142,13 @@ class MpBackup(multiprocessing.Process):
 
     def run(self):
         copy_queue_size = self.copy_queue.qsize()
-
+        logger.debug("{} copy queue size {}"
+                     .format(self.name, copy_queue_size))
         if copy_queue_size:
             thread_count = min(self.thread_count, copy_queue_size)
 
-            # Start copying S3 objects to destiantion bucket
+            # Start copying S3 objects from
+            # source bucket to destiantion bucket
             # Consume copy_queue until it is empty
             th_lst = list()
             logger.info("{} starting {} threads."
@@ -148,13 +164,15 @@ class MpBackup(multiprocessing.Process):
                              .format(self.name, th_lst[t].name))
 
             try:
+                logger.debug("Checking copy queue size if empty.")
                 while not self.copy_queue.empty():
-                    time.sleep(1)
+                    logger.info("Copy queue not empty {} keys. \
+                                Waiting for 60s."
+                                .format(self.copy_queue.qsize()))
+                    time.sleep(60)
             except KeyboardInterrupt:
                 logger.info("Exiting...")
                 sys.exit(127)
-            else:
-                self.copy_queue.join()
 
             logger.info("{} joining all threads.".format(self.name))
             for t in range(thread_count):
@@ -162,14 +180,18 @@ class MpBackup(multiprocessing.Process):
                              .format(self.name, th_lst[t].name))
                 try:
                     while th_lst[t].is_alive():
-                        time.sleep(1)
+                        logger.debug("In {} {} is still alive. \
+                                     Waiting for 60s."
+                                     .format(self.name, th_lst[t].name))
+                        time.sleep(60)
                 except KeyboardInterrupt:
                     logger.warning("Exiting...")
                     sys.exit(127)
                 else:
+                    logger.debug("Try joining copy {}.".format(th_lst[t].name))
                     th_lst[t].join(timeout=self.timeout)
-                    logger.debug("{} {} finished."
+                    logger.debug("{} copy {} joined."
                                  .format(self.name, th_lst[t].name))
-            logger.info("{} all threads finished.".format(self.name))
+            logger.info("{} all copy threads finished.".format(self.name))
         else:
             logger.warning("No objects to copy for {}!".format(self.name))

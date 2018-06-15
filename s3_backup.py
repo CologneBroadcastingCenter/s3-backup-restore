@@ -9,9 +9,10 @@ import time
 import cmd_args
 import s3backuprestore as s3br
 
-cmp_q = mp.JoinableQueue()
-cp_q = mp.JoinableQueue()
-tag_q = mp.JoinableQueue()
+manager = mp.Manager()
+cmp_q = manager.Queue()
+cp_q = manager.Queue()
+tag_q = manager.Queue()
 
 logging.basicConfig(
     level=logging.ERROR,
@@ -98,13 +99,11 @@ if __name__ == '__main__':
         config=backup_config,
         objects_count=OBJECTS_COUNT)
     logger.info("{} objects in {}.".format(len(src_obj), SRC_BUCKET))
-    logger.debug("Objects: {}".format(src_obj))
 
     if ALL:
         # Getting objects not in destination bucket
         [cp_q.put(o) for o in src_obj]
         logger.info("{} objects to copy bucket.".format(cp_q.qsize()))
-        logger.debug("Objects: {}".format(src_obj))
     else:
         # Getting S3 keys from destiantion bucket
         logger.debug("List S3 Keys from {}".format(DST_BUCKET))
@@ -112,21 +111,18 @@ if __name__ == '__main__':
             DST_BUCKET,
             config=backup_config)
         logger.info("{} in {}.".format(len(dst_obj), DST_BUCKET))
-        logger.debug("Objects: {}".format(dst_obj))
 
         # Getting objects not in destination bucket
         cp_obj = set(src_obj) - set(dst_obj)
         [cp_q.put(o) for o in cp_obj]
         logger.info("{} objects not in destination bucket."
                     .format(cp_q.qsize()))
-        logger.debug("Objects: {}".format(cp_obj))
 
         # Getting objects to compare between source and destination
         cmp_obj = set(src_obj) & set(dst_obj)
         [cmp_q.put(o) for o in cmp_obj]
         cmp_q_size = cmp_q.qsize()
         logger.info("{} objects to compare.".format(cmp_q_size))
-        logger.debug("Objects: {}".format(cmp_obj))
 
         # Puting metric how many objects to compare
         s3br.put_metric(
@@ -154,16 +150,19 @@ if __name__ == '__main__':
             for p in range(processes):
                 try:
                     while proc_lst[p].is_alive():
-                        logger.debug("{} still alive waiting 1s."
+                        logger.debug("{} still alive waiting 60s."
                                      .format(proc_lst[p].name))
-                        time.sleep(1)
+                        time.sleep(60)
                         qs = cmp_q.qsize()
+                        logger.debug("Compare queue size {}".format(qs))
                         s3br.put_metric(
                             'ObjectsToCompare', qs, config=backup_config)
                 except KeyboardInterrupt:
                     logger.warning("Exiting...")
                     sys.exit(127)
                 else:
+                    logger.debug("Joining process {}."
+                                 .format(proc_lst[p].name))
                     proc_lst[p].join(backup_config.timeout)
                     logger.debug("{} finished.".format(proc_lst[p].name))
             logger.info("All compare processes are finished.")
@@ -201,9 +200,9 @@ if __name__ == '__main__':
         for p in range(processes):
             try:
                 while proc_lst[p].is_alive():
-                    logger.debug("{} still alive waiting 1s."
+                    logger.debug("{} still alive waiting 60s."
                                  .format(proc_lst[p].name))
-                    time.sleep(1)
+                    time.sleep(60)
                     qs = cp_q.qsize()
                     s3br.put_metric(
                         'ObjectsToCopy', qs, config=backup_config)
@@ -253,9 +252,9 @@ if __name__ == '__main__':
             for p in range(processes):
                 try:
                     while proc_lst[p].is_alive():
-                        logger.debug("{} still alive waiting 1s."
+                        logger.debug("{} still alive waiting 60s."
                                      .format(proc_lst[p].name))
-                        time.sleep(1)
+                        time.sleep(60)
                         qs = tag_q.qsize()
                         s3br.put_metric(
                             'ObjectsToTagAsDeleted', qs, config=backup_config)

@@ -3,6 +3,7 @@ import threading
 import queue
 import multiprocessing
 import time
+from random import randint
 from datetime import datetime, timedelta, timezone
 
 from .cw import put_metric
@@ -10,7 +11,7 @@ from .log import logger
 
 
 class Compare(threading.Thread):
-    def __init__(self, config, compare_queue, copy_queue,
+    def __init__(self, config, compare_queue, copy_queue, max_wait=300,
                  cw_metric_name='CompareObjectsErrors'):
         threading.Thread.__init__(self)
         self.config = config
@@ -25,6 +26,7 @@ class Compare(threading.Thread):
         self.cw_metric_name = cw_metric_name
         self.compare_queue = compare_queue
         self.copy_queue = copy_queue
+        self.max_wait = max_wait
         self.daemon = True
         self._session = config.boto3_session()
 
@@ -38,51 +40,61 @@ class Compare(threading.Thread):
             sys.exit(127)
 
         while not self.compare_queue.empty():
+            logger.debug("Compare queue size: {} keys"
+                         .format(self.compare_queue.qsize()))
             try:
                 key = self.compare_queue.get(timeout=self.timeout)
+                logger.info("Got key {} from compare queue.".format(key))
             except queue.Empty:
+                logger.warning("Compare queue seems empty. Checking again.")
                 continue
 
             try:
                 src_lm = s3.Object(self.src_bucket, key).last_modified
-                logger.debug("\n{}\nLastModified {}".format(key, src_lm))
+                logger.info("\n{}\nLastModified {}".format(key, src_lm))
 
                 src_cl = s3.Object(self.src_bucket, key).content_length
                 dst_cl = s3.Object(self.dst_bucket, key).content_length
-                logger.debug("\n{}\nSource ContentLength: \t{}\n"
-                             "Destination ContentLength: \t{}"
-                             .format(key, src_cl, dst_cl))
+                logger.info("\n{}\nSource ContentLength: \t{}\n"
+                            "Destination ContentLength: \t{}"
+                            .format(key, src_cl, dst_cl))
 
-                # Reduce waiting time
-                if waiter > 1:
-                    waiter /= 2
-
+                waiter = max(round(waiter * 0.8), 1)
+                logger.debug("Reduced waiting time to {}s.".format(waiter))
             except ConnectionRefusedError as exc:
-                logger.exception("Put {} back to queue.".format(key))
+                logger.error("Put {} back to queue.".format(key))
+                logger.debug("", exc_info=True)
                 put_metric(self.cw_metric_name, 1, self.config)
-                self.compare_queue.put(key)
+                self.compare_queue.put(key, timeout=self.timeout)
+                logger.debug("Error occured sleeping for {}s.".format(waiter))
                 time.sleep(waiter)
-                # Increase waiting time
-                waiter *= 2
+
+                # Set next waiting time
+                waiter = randint(1, min(self.max_wait, waiter * 4))
+                logger.debug("Next waiting time {}s.".format(waiter))
             except:
-                logger.exception("Unhandeld exception occured.\n"
-                                 "Put {} back to queue.".format(key))
+                logger.exception("Unhandeld exception occured.\n \
+                                 Put {} back to compare queue.".format(key))
                 put_metric(self.cw_metric_name, 1, self.config)
+                self.compare_queue.put(key, timeout=self.timeout)
+
+                logger.debug("Error occured sleeping for {}s.".format(waiter))
                 time.sleep(waiter)
                 # Increase waiting time
-                waiter *= 2
+                waiter = randint(1, min(self.max_wait, waiter * 4))
+                logger.debug("Next waiting time {}s.".format(waiter))
             else:
                 if src_cl != dst_cl:
                     logger.info("Content length is unequal between"
                                 "source and destination object.\n"
                                 "Adding {} to copy queue.".format(key))
-                    self.copy_queue.put(key)
+                    self.copy_queue.put(key, timeout=self.timeout)
                 elif src_lm > self.timedelta:
-                    logger.info("Object modified within last {}h.\n " +
-                                "Adding {} to queue."
+                    logger.info("Object modified within last {}h.\n \
+                                Adding {} to queue."
                                 .format(self.last_modified, key))
-                    self.copy_queue.put(key)
-                self.compare_queue.task_done()
+                    self.copy_queue.put(key, timeout=self.timeout)
+                logger.debug("Comparing for {} done.".format(key))
 
 
 class MpCompare(multiprocessing.Process):
@@ -98,12 +110,16 @@ class MpCompare(multiprocessing.Process):
 
     def run(self):
         compare_queue_size = self.compare_queue.qsize()
+        logger.debug("{} compare queue size {}"
+                     .format(self.name, compare_queue_size))
 
         if compare_queue_size:
             thread_count = min(self.thread_count, compare_queue_size)
 
-            # Start copying S3 objects to destiantion bucket
-            # Consume copy_queue until it is empty
+            # Start comparing S3 keys
+            # Consume compare_queue until it is empty
+            # Put all keys to copy_queue if they are different
+            # between source bucket and destination bucket.
             th_lst = list()
             logger.info("{} starting {} threads."
                         .format(self.name, thread_count))
@@ -117,15 +133,20 @@ class MpCompare(multiprocessing.Process):
                 th_lst[t].start()
                 logger.debug("{} {} started."
                              .format(self.name, th_lst[t].name))
+            logger.debug("{} started {} threads."
+                         .format(self.name, len(th_lst)))
 
             try:
+                logger.debug("{} checking compare queue size if empty."
+                             .format(self.name))
                 while not self.compare_queue.empty():
-                        time.sleep(1)
+                    logger.info("{} compare queue not empty {} keys."
+                                "Waiting for 60s."
+                                .format(self.name, self.compare_queue.qsize()))
+                    time.sleep(60)
             except KeyboardInterrupt:
                 logger.info("Exiting...")
                 sys.exit(127)
-            else:
-                self.compare_queue.join()
 
             logger.info("{} joining all threads.".format(self.name))
             for t in range(thread_count):
@@ -133,15 +154,19 @@ class MpCompare(multiprocessing.Process):
                              .format(self.name, th_lst[t].name))
                 try:
                     while th_lst[t].is_alive():
-                        time.sleep(1)
+                        logger.debug("In {} {} is still alive. \
+                                     Waiting for 60s."
+                                     .format(self.name, th_lst[t].name))
+                        time.sleep(60)
                 except KeyboardInterrupt:
                     logger.warning("Exiting...")
                     sys.exit(127)
                 else:
-                    th_lst[t].join(timeout=self.timeout)
-                    logger.debug("{} {} finished."
+                    logger.debug("{} try joining compare {}."
                                  .format(self.name, th_lst[t].name))
-            logger.info("{} all threads finished.".format(self.name))
+                    th_lst[t].join(timeout=self.timeout)
+                    logger.debug("{} {} joined."
+                                 .format(self.name, th_lst[t].name))
+            logger.info("{} all compare threads finished.".format(self.name))
         else:
-            logger.warning("No objects to compare for {}!"
-                           .format(self.name))
+            logger.warning("No objects to compare for {}!".format(self.name))

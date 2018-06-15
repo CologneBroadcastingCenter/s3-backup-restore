@@ -3,6 +3,7 @@ import queue
 import sys
 import threading
 import time
+from random import randint
 from datetime import datetime
 
 from .cw import put_metric
@@ -115,8 +116,11 @@ class TagDeletedObjects(threading.Thread):
             sys.exit(127)
 
         while not self.tag_queue.empty():
+            logger.debug("Tag queue size: {} keys"
+                         .format(self.tag_queue.qsize()))
             try:
                 key = self.tag_queue.get(timeout=self.timeout)
+                logger.info("Got key {} from tag queue.".format(key))
             except queue.Empty as exc:
                 continue
             deleted_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -129,67 +133,79 @@ class TagDeletedObjects(threading.Thread):
                     Bucket=self.dst_bucket,
                     Key=key
                 )
-            except ConnectionRefusedError:
-                logger.exception("Waiting for {}s. "
-                                 "Put {} back to queue.".format(key))
+                waiter = max(round(waiter * 0.8), 1)
+                logger.debug("Reduced waiting time to {}s.".format(waiter))
+            except ConnectionRefusedError as exc:
+                logger.error("Put {} back to queue.".format(key))
+                logger.debug("", exc_info=True)
                 put_metric(self.cw_metric_name, 1, self.config)
-                self.tag_queue.put(key)
+                self.tag_queue.put(key, timeout=self.timeout)
+                logger.debug("Error occured sleeping for {}s.".format(waiter))
                 time.sleep(waiter)
-                # Increase waiting time
-                waiter *= 2
-            except:
-                logger.exception("Unhandeld exception occured.\n"
-                                 "Put {} back to queue.".format(key))
-                put_metric(self.cw_metric_name, 1, self.config)
-                self.tag_queue.put(key)
-                # Increase waiting time
-                waiter *= 2
-            for tag_key in response['TagSet']:
-                logger.debug("TagSet for key {}: {}".format(key, tag_key))
-                try:
-                    if tag_key['Key'] == 'Deleted':
-                        deleted = False
-                        logger.debug("Tag 'Deleted' exists for {}."
-                                     .format(key))
-                    if tag_key['Key'] == 'DeletedAt':
-                        deleted_at = False
-                        logger.debug("Tag 'DeletedAt' exists for {}."
-                                     .format(key))
-                except KeyError:
-                    logger.info("{} has no tags.".format(key))
 
-            if deleted or deleted_at:
-                logger.info("Tagging object {}".format(key))
-                kwargs = {
-                    'Bucket': self.dst_bucket,
-                    'Key': key,
-                    'Tagging': {
-                        'TagSet': [
-                            {
-                                'Key': 'Deleted',
-                                'Value': 'True'
-                            },
-                            {
-                                'Key': 'DeletedAt',
-                                'Value': deleted_time
-                            }
-                        ]
-                    }
-                }
-                try:
-                    response = s3.meta.client.put_object_tagging(**kwargs)
-                    logger.info("{} will be tagged as deleted.".format(key))
-                    self.tag_queue.task_done()
-                except:
-                    logger.exception("Unhandeld exception occured.\n"
-                                     "Put {} back to queue.".format(key))
-                    put_metric(self.cw_metric_name, 1, self.config)
-                    self.tag_queue.put(key)
-                    time.sleep(waiter)
-                    # Increase waiting time
-                    waiter *= 2
+                # Set next waiting time
+                waiter = randint(1, min(self.max_wait, waiter * 4))
+                logger.debug("Next waiting time {}s.".format(waiter))
+            except:
+                logger.exception("Unhandeld exception occured.\n \
+                                 Put {} back to queue.".format(key))
+                put_metric(self.cw_metric_name, 1, self.config)
+                self.tag_queue.put(key, timeout=self.timeout)
+
+                logger.debug("Error occured sleeping for {}s.".format(waiter))
+                time.sleep(waiter)
+                # Set next waiting time
+                waiter = randint(1, min(self.max_wait, waiter * 4))
+                logger.debug("Next waiting time {}s.".format(waiter))
             else:
-                self.tag_queue.task_done()
+                for tag_key in response['TagSet']:
+                    logger.debug("TagSet for key {}: \n{}"
+                                 .format(key, tag_key))
+                    try:
+                        if tag_key['Key'] == 'Deleted':
+                            deleted = False
+                            logger.debug("Tag 'Deleted' exists for {}."
+                                         .format(key))
+                        if tag_key['Key'] == 'DeletedAt':
+                            deleted_at = False
+                            logger.debug("Tag 'DeletedAt' exists for {}."
+                                         .format(key))
+                    except KeyError:
+                        logger.info("{} has no tags.".format(key))
+
+                if deleted or deleted_at:
+                    logger.info("Tagging object {}".format(key))
+                    kwargs = {
+                        'Bucket': self.dst_bucket,
+                        'Key': key,
+                        'Tagging': {
+                            'TagSet': [
+                                {
+                                    'Key': 'Deleted',
+                                    'Value': 'True'
+                                },
+                                {
+                                    'Key': 'DeletedAt',
+                                    'Value': deleted_time
+                                }
+                            ]
+                        }
+                    }
+                    try:
+                        response = s3.meta.client.put_object_tagging(**kwargs)
+                        logger.info("{} tagged as deleted.".format(key))
+                    except:
+                        logger.exception("Unhandeld exception occured.\n \
+                                 Put {} back to queue.".format(key))
+                        put_metric(self.cw_metric_name, 1, self.config)
+                        self.tag_queue.put(key, timeout=self.timeout)
+
+                        logger.debug("Error occured sleeping for {}s."
+                                     .format(waiter))
+                        time.sleep(waiter)
+                        # Set next waiting time
+                        waiter = randint(1, min(self.max_wait, waiter * 4))
+                        logger.debug("Next waiting time {}s.".format(waiter))
 
 
 class MpTagDeletedObjects(multiprocessing.Process):
@@ -204,6 +220,8 @@ class MpTagDeletedObjects(multiprocessing.Process):
 
     def run(self):
         tag_queue_size = self.tag_queue.qsize()
+        logger.debug("{} compare queue size {}"
+                     .format(self.name, tag_queue_size))
 
         if tag_queue_size:
             thread_count = min(self.thread_count, tag_queue_size)
@@ -222,15 +240,20 @@ class MpTagDeletedObjects(multiprocessing.Process):
                 th_lst[t].start()
                 logger.debug("{} {} started."
                              .format(self.name, th_lst[t].name))
+            logger.debug("{} started {} threads."
+                         .format(self.name, len(th_lst)))
 
             try:
+                logger.debug("{} checking tag queue size if empty."
+                             .format(self.name))
                 while not self.tag_queue.empty():
-                        time.sleep(1)
+                    logger.info("{} compare queue not empty {} keys. \
+                                Waiting for 60s."
+                                .format(self.name, self.tag_queue.qsize()))
+                    time.sleep(60)
             except KeyboardInterrupt:
                 logger.info("Exiting...")
                 sys.exit(127)
-            else:
-                self.tag_queue.join()
 
             logger.info("{} joining all threads.".format(self.name))
             for t in range(thread_count):
@@ -238,15 +261,19 @@ class MpTagDeletedObjects(multiprocessing.Process):
                              .format(self.name, th_lst[t].name))
                 try:
                     while th_lst[t].is_alive():
-                        time.sleep(1)
+                        logger.debug("In {} {} is still alive. \
+                                     Waiting for 60s."
+                                     .format(self.name, th_lst[t].name))
+                        time.sleep(60)
                 except KeyboardInterrupt:
                     logger.warning("Exiting...")
                     sys.exit(127)
                 else:
-                    th_lst[t].join(timeout=self.timeout)
-                    logger.debug("{} {} finished."
+                    logger.debug("{} try joining tag {}."
                                  .format(self.name, th_lst[t].name))
-            logger.info("{} all threads finished.".format(self.name))
+                    th_lst[t].join(timeout=self.timeout)
+                    logger.debug("{} {} joined."
+                                 .format(self.name, th_lst[t].name))
+            logger.info("{} all tag threads finished.".format(self.name))
         else:
-            logger.warning("No objects to tag {}!"
-                           .format(self.name))
+            logger.warning("No objects to tag for {}!".format(self.name))
