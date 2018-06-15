@@ -1,6 +1,6 @@
 from .objects import get_objects, delete_objects
-from .backup import Backup, MpBackup
-from .restore import Restore, MpRestore
-from .tagging import TagDeletedObjects, MpTagDeletedObjects
-from .compare import Compare, MpCompare
+from .backup import MpBackup
+from .restore import MpRestore
+from .tagging import MpTagDeletedObjects
+from .compare import MpCompare
 from .cw import put_metric

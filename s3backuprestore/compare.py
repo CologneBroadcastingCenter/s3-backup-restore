@@ -10,9 +10,33 @@ from .cw import put_metric
 from .log import logger
 
 
-class Compare(threading.Thread):
+class _Compare(threading.Thread):
     def __init__(self, config, compare_queue, copy_queue, max_wait=300,
                  cw_metric_name='CompareObjectsErrors'):
+        """Class that compares objects and check if they are unequal.
+
+        This class consumes compare_queue and compares objects between
+        source bucket and destiantion bucket if they are unequal. If objects
+        exists and are unequal they will be put into the copy queue and will
+        be consumed elswehre.
+        There are two kinds of parameters that will be checked.
+        First the content length among the objects.
+        Second the last modified time.
+        If one of those parameters are unequal they will be added to the
+        copy queue.
+
+        Args:
+            config (s3backuprestore.config.Config()): Configuration object
+            for this class.
+            compare_queue (Queue): A consumable queue like Queue.queue()
+            copy_queue (Queue): A consumable queue like Queue.queue()
+            max_wait (int, optional): Defaults to 300. If something went wrong
+            and will be catched by an exception. We will wait for a particular
+            time range. The range is between 1 and max_wait.
+            cw_metric_name (str, optional): Defaults to 'CompareObjectsErrors'.
+            Cloudwatch metric name where datapoint will be pushed to.
+        """
+
         threading.Thread.__init__(self)
         self.config = config
         self.timeout = self.config.timeout
@@ -100,6 +124,20 @@ class Compare(threading.Thread):
 class MpCompare(multiprocessing.Process):
     def __init__(self, config, compare_queue, copy_queue, thread_count=5,
                  cw_metric_name='ObjectsToCompare'):
+        """Class which will start _Compare
+
+        [description]
+
+        Args:
+            config (s3backuprestore.config.Config): Configuration object
+            for this class.
+            compare_queue (Queue): A consumable queue like Queue.queue()
+            copy_queue (Queue): A consumable queue like Queue.queue()
+            thread_count (int, optional): Defaults to 5.
+            cw_metric_name (str, optional): Defaults to 'ObjectsToCompare'.
+            Cloudwatch metric name where datapoint will be pushed to.
+        """
+
         multiprocessing.Process.__init__(self)
         self.config = config
         self.compare_queue = compare_queue

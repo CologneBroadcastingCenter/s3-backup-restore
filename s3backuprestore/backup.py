@@ -10,9 +10,30 @@ from .cw import put_metric
 from .log import logger
 
 
-class Backup(threading.Thread):
+class _Backup(threading.Thread):
     def __init__(self, config, copy_queue, max_wait=300,
                  cw_metric_name='BackupObjectsErrors'):
+        """Class which will copy objects from source bucket to
+        destination bucket using boto3s copy method.
+
+        This class is inherited from threading.Thread it copies s3 objects
+        using boto3's copy() method. You should not use this method if you are
+        not really sure why.
+
+        You have to provide a configuration object provided by
+        s3backuprestore.config.Config() and a consumable queue filled
+        with S3 keys.
+
+        Args:
+            config (s3backuprestore.config.Config()): Configuration object
+            for this class.
+            copy_queue (Queue): A consumable queue like Queue.queue()
+            max_wait (int, optional): Defaults to 300. Waiting time if there
+            are any errors, holds the thread and starts it after a range
+            between 1 and max_wait.
+            cw_metric_name (str, optional): Defaults to 'BackupObjectsErrors'.
+            Cloudwatch metric name where datapoint will be pushed to.
+        """
         threading.Thread.__init__(self)
         self.config = config
         self.timeout = self.config.timeout
@@ -133,6 +154,22 @@ class Backup(threading.Thread):
 class MpBackup(multiprocessing.Process):
     def __init__(self, config, copy_queue, thread_count=10,
                  cw_metric_name='ObjectsToCopy'):
+        """Class which will start _Backup() threads.
+
+        This class will start processes with _Backup() threads so that they can
+        consume the copy queue until its empty. Each object will spawn a new
+        child process.
+
+         Args:
+            config (s3backuprestore.config.Config): Configuration object
+            for this class.
+            copy_queue (Queue): A consumable queue, like Queue.queue().
+            thread_count (int, optional): Defaults to 10. Number of threads
+            which will be spawned in each process.
+            cw_metric_name (str, optional): Defaults to 'ObjectsToCopy'.
+            Cloudwatch metric name where datapoint will be pushed to.
+        """
+
         multiprocessing.Process.__init__(self)
         self.config = config
         self.copy_queue = copy_queue
@@ -154,7 +191,7 @@ class MpBackup(multiprocessing.Process):
             logger.info("{} starting {} threads."
                         .format(self.name, thread_count))
             for t in range(thread_count):
-                th_lst.append(Backup(
+                th_lst.append(_Backup(
                     self.config,
                     self.copy_queue))
                 logger.debug("{} {} generated."

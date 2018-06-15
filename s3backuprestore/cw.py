@@ -6,6 +6,24 @@ from .log import logger
 
 def put_metric(cw_metric_name, statistic_value, config=None,
                cw_dimension_name=None, cw_namespace=None):
+    """Function that will put metrics to cloudwatch.
+
+    This function puts metrics to cloudwatch.
+    If statistic_value is 0 it will be converted to 0.1 it is not possible
+    to 0 to cloudwatch.
+
+    Args:
+        cw_metric_name (str): Name of the cloudwatch metric.
+        statistic_value (int, float): Value to send to cloudwatch as metric.
+        config (s3backuprestore.config.Config): Configuration object
+        for this class.
+        cw_dimension_name (str, optional): Defaults to None. Cloudwatch
+        dimension name.
+        cw_namespace (str, optional): Defaults to None. Cloudwatch namespace.
+
+    Raises:
+        ValueError: If statistic_value is not convertible to float.
+    """
 
     try:
         if config:

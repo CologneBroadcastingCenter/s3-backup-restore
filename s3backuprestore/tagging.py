@@ -92,9 +92,29 @@ class CheckDeletedTaggs(threading.Thread):
                     self.check_deleted_taggs_queue.task_done()
 
 
-class TagDeletedObjects(threading.Thread):
+class _TagDeletedObjects(threading.Thread):
     def __init__(self, config, tag_queue,
                  cw_metric_name='TagDeletedObjectsErrors'):
+        """Class which will tag objects as deleted.
+
+        This class is inherited from threading.Thread. It tags s3 objects as
+        deleted. Each object consumed by this thread gets following Tags
+            Deleted: 'True'
+            DeletedAt: datetime (Format: '%Y-%m-%dT%H:%M:%S')
+
+        You have to provide a configuration object provided by
+        s3backuprestore.config.Config and a consumable queue filled
+        with S3 keys.
+
+        Args:
+            config ([s3backuprestore.config.Config()]): Configuration object
+            for this class.
+            tag_queue (Queue): A consumable queue like Queue.queue().
+            cw_metric_name (str, optional): Defaults to
+            'TagDeletedObjectsErrors'. Cloudwatch metric name where datapoint
+            will be pushed to.
+        """
+
         threading.Thread.__init__(self)
         self.config = config
         self.timeout = self.config.timeout
@@ -211,6 +231,22 @@ class TagDeletedObjects(threading.Thread):
 class MpTagDeletedObjects(multiprocessing.Process):
     def __init__(self, config, tag_queue, thread_count=10,
                  cw_metric_name='ObjectsToCompare'):
+        """Class which will start _TagDeletedObjects threads.
+
+        This class will start processes with _TagDeletedObjects() threads so
+        that they can consume the tag queue until its empty. Each object will
+        spawn a new child process.
+
+        Args:
+            config (s3backuprestore.config.Config): Configuration object
+            for this class.
+            tag_queue (Queue): A consumable queue, like Queue.queue().
+            thread_count (int, optional): Defaults to 10. Number fos threads
+            which will be spawned in each process.
+            cw_metric_name (str, optional): Defaults to 'ObjectsToCompare'.
+            Cloudwatch metric name where datapoint will be pushed to.
+        """
+
         multiprocessing.Process.__init__(self)
         self.config = config
         self.tag_queue = tag_queue
@@ -232,7 +268,7 @@ class MpTagDeletedObjects(multiprocessing.Process):
             logger.info("{} starting {} threads."
                         .format(self.name, thread_count))
             for t in range(thread_count):
-                th_lst.append(TagDeletedObjects(
+                th_lst.append(_TagDeletedObjects(
                     self.config,
                     self.tag_queue))
                 logger.debug("{} {} generated."
