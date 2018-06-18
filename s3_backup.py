@@ -176,7 +176,7 @@ if __name__ == '__main__':
     cp_q_size = cp_q.qsize()
     # Puting metric how many objects to backup
     s3br.put_metric(
-        'ObjectsToCopy',
+        'ObjectsToBackup',
         cp_q_size,
         config=backup_config)
     logger.info("{} objects to backup to destination bucket."
@@ -205,7 +205,7 @@ if __name__ == '__main__':
                     time.sleep(60)
                     qs = cp_q.qsize()
                     s3br.put_metric(
-                        'ObjectsToCopy', qs, config=backup_config)
+                        'ObjectsToBackup', qs, config=backup_config)
             except KeyboardInterrupt:
                 logger.warning("Exiting...")
                 sys.exit(127)
@@ -213,7 +213,7 @@ if __name__ == '__main__':
                 proc_lst[p].join(backup_config.timeout)
                 logger.debug("{} finished.".format(proc_lst[p].name))
         logger.info("All backup processes are finished.")
-        s3br.put_metric('ObjectsToCopy', 0, config=backup_config)
+        s3br.put_metric('ObjectsToBackup', 0, config=backup_config)
         logger.info("Backup objects took {} seconds."
                     .format(time.time() - start))
     else:
