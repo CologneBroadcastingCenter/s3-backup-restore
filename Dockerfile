@@ -17,7 +17,7 @@ ADD s3backuprestore/tagging.py  /app/s3backuprestore/tagging.py
 
 ADD cmd_args.py /app
 ADD s3_backup.py /app
-#ADD s3_restore.py /app
+ADD s3_restore.py /app
 ADD requirements.txt /app
 
 RUN pip-3.6 install -r /app/requirements.txt
