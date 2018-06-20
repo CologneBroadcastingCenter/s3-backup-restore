@@ -55,7 +55,7 @@ class _Restore(threading.Thread):
 
         while not self.restore_queue.empty():
             logger.debug("Restore queue size: {} keys"
-                         .format(self.copy_queue.qsize()))
+                         .format(self.restore_queue.qsize()))
             try:
                 key = self.restore_queue.get(timeout=self.timeout)
                 logger.info("Got key {} from restore queue.".format(key))
@@ -274,7 +274,7 @@ class MpRestore(multiprocessing.Process):
                 while not self.restore_queue.empty():
                     logger.info("Restore queue not empty {} keys. "
                                 "Waiting for 60s."
-                                .format(self.copy_queue.qsize()))
+                                .format(self.restore_queue.qsize()))
                     time.sleep(60)
             except KeyboardInterrupt:
                 logger.info("Exiting...")
