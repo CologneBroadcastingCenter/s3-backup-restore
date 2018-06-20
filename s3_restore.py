@@ -9,10 +9,6 @@ import time
 import cmd_args
 import s3backuprestore as s3br
 
-manager = mp.Manager()
-rst_q = manager.Queue()
-check_deleted_q = manager.Queue()
-
 logging.basicConfig(
     level=logging.ERROR,
     format="%(asctime)s [%(levelname)s] %(module)s %(funcName)s" +
@@ -54,6 +50,10 @@ elif VERBOSE and VERBOSE >= 3:
     s3br_logger.setLevel(logging.DEBUG)
 
 if __name__ == '__main__':
+    manager = mp.Manager()
+    restore_queue = manager.Queue()
+    check_deleted_q = manager.Queue()
+
     # Try to set start method of multiprocessing
     # environment to spawn. Spawn context is threadsafe
     # and copies only mandatory data to each process.
@@ -88,8 +88,8 @@ if __name__ == '__main__':
     logger.info("{} objects in {}.".format(len(src_obj), SRC_BUCKET))
 
     if ALL:
-        [rst_q.put(o) for o in src_obj]
-        logger.info("{} objects to restore".format(rst_q.qsize()))
+        [restore_queue.put(o) for o in src_obj]
+        logger.info("{} objects to restore".format(restore_queue.qsize()))
     elif CHECK_DELETED_TAG:
         [check_deleted_q.put(o) for o in src_obj]
         check_deleted_q_size = check_deleted_q.qsize()
@@ -113,8 +113,8 @@ if __name__ == '__main__':
             for p in range(processes):
                 proc_lst.append(s3br.MpCheckDeletedTag(
                     config=restore_config,
-                    check_queue=check_deleted_q,
-                    checked_queue=rst_q,
+                    check_deleted_tag_queue=check_deleted_q,
+                    restore_queue=restore_queue,
                     thread_count=25
                 ))
                 proc_lst[p].start()
@@ -150,7 +150,7 @@ if __name__ == '__main__':
             logger.info("No objects to check for deleted tag.")
 
     # Get total number of objects to restore to destination bucket.
-    rst_q_size = rst_q.qsize()
+    rst_q_size = restore_queue.qsize()
     # Puting metric how many objects to backup
     s3br.put_metric(
         'ObjectsToRestore',
@@ -167,7 +167,7 @@ if __name__ == '__main__':
         for p in range(processes):
             proc_lst.append(s3br.MpRestore(
                 config=restore_config,
-                copy_queue=rst_q,
+                restore_queue=restore_queue,
                 thread_count=25
             ))
             proc_lst[p].start()
@@ -180,7 +180,7 @@ if __name__ == '__main__':
                     logger.debug("{} still alive waiting 60s."
                                  .format(proc_lst[p].name))
                     time.sleep(60)
-                    qs = rst_q.qsize()
+                    qs = restore_queue.qsize()
                     s3br.put_metric(
                         'ObjectsToRestore', qs, config=restore_config)
             except KeyboardInterrupt:

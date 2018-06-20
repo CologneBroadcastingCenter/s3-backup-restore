@@ -1,7 +1,7 @@
 SHELL = /bin/sh
 
 login:
-		`aws --profile rin-tvnow-backup-prod ecr get-login --no-include-email --region eu-central-1`
+		`aws --profile ${PROFILE} ecr get-login --no-include-email --region eu-central-1`
 
 build:
 		docker build --no-cache -t cbc/clouds/s3-backup-restore .

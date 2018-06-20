@@ -9,11 +9,6 @@ import time
 import cmd_args
 import s3backuprestore as s3br
 
-manager = mp.Manager()
-cmp_q = manager.Queue()
-cp_q = manager.Queue()
-tag_q = manager.Queue()
-
 logging.basicConfig(
     level=logging.ERROR,
     format="%(asctime)s [%(levelname)s] %(module)s %(funcName)s" +
@@ -66,6 +61,11 @@ elif VERBOSE and VERBOSE >= 3:
     s3br_logger.setLevel(logging.DEBUG)
 
 if __name__ == '__main__':
+    manager = mp.Manager()
+    cmp_q = manager.Queue()
+    cp_q = manager.Queue()
+    tag_q = manager.Queue()
+
     # Try to set start method of mp
     # environment to spawn. Spawn context is threadsafe
     # and copies only mandatory data to each process.
