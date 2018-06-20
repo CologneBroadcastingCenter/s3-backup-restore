@@ -162,7 +162,7 @@ class MpCompare(multiprocessing.Process):
             logger.info("{} starting {} threads."
                         .format(self.name, thread_count))
             for t in range(thread_count):
-                th_lst.append(Compare(
+                th_lst.append(_Compare(
                     self.config,
                     self.compare_queue,
                     self.copy_queue))
