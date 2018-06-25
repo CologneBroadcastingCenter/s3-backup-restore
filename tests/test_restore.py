@@ -18,6 +18,13 @@ parser.add_argument(
     help='Bucket to use.'
 )
 parser.add_argument(
+    '--number-of-buckets',
+    help='Number of buckets to create. '
+         'Each bucket name will be appended with a number.',
+    default=1,
+    type=int
+)
+parser.add_argument(
     '--object-count',
     help='Number of objects to create and update.',
     default=100,
@@ -46,6 +53,7 @@ args = parser.parse_args()
 
 PROFILE = args.profile
 BUCKET = args.bucket
+NUMBER_OF_BUCKETS = args.number_of_buckets
 OBJECT_COUNT = args.object_count
 MAX_OBJECT_SIZE = args.max_object_size
 TAG_RANDOM_OBJECTS = args.tag_random_objects
@@ -101,39 +109,45 @@ if __name__ == '__main__':
         session = boto3.session.Session()
     s3 = session.resource('s3')
 
-    try:
-        s3.meta.client.head_bucket(Bucket=BUCKET)
-    except ClientError as exc:
-        if 'Forbidden' in exc.args[0]:
-            print("You do not have access to {}.".format(BUCKET))
-        elif 'Not Found' in exc.args[0]:
-            print("There is no bucket {}".format(BUCKET))
-            answere = input("Do you want to create {}?(y/n)".format(BUCKET))
-            if 'Y' in answere.upper():
-                print("Create test Bucket {}".format(BUCKET))
-                create_bucket(session, BUCKET)
+    answere = ""
+    for num in range(NUMBER_OF_BUCKETS):
+        try:
+            bucket_name = BUCKET + "-" + str(num)
+            s3.meta.client.head_bucket(Bucket=bucket_name)
+        except ClientError as exc:
+            if 'Forbidden' in exc.args[0]:
+                print("You do not have access to {}.".format(bucket_name))
+            elif 'Not Found' in exc.args[0]:
+                print("There is no bucket {}".format(bucket_name))
+                if answere == 'y' or answere == "":
+                    answere = input("Do you want to create {}, "
+                                    "Y means yes to all?([Y,y]/n)"
+                                    .format(bucket_name))
+                if 'Y' in answere.upper():
+                    print("Create test Bucket {}".format(bucket_name))
+                    create_bucket(session, bucket_name)
+                else:
+                    print("Exiting...")
+                    sys.exit(127)
             else:
-                print("Exiting...")
-                sys.exit(127)
+                print("{}".format(exc.args))
         else:
-            print("{}".format(exc.args))
+            count_obj = 0
+            count_deleted_obj = 0
+            count = 0
+            for i in range(OBJECT_COUNT):
+                s3_byte_obj = create_objects(MAX_OBJECT_SIZE)
+                key = upload_object(session, bucket_name, s3_byte_obj)
 
-    count_obj = 0
-    count_deleted_obj = 0
-    count = 0
-    for i in range(OBJECT_COUNT):
-        s3_byte_obj = create_objects(MAX_OBJECT_SIZE)
-        key = upload_object(session, BUCKET, s3_byte_obj)
+                if TAG_RANDOM_OBJECTS:
+                    if round((PERCENT * count), 1) >= 100:
+                        tag_object_as_deleted(session, bucket_name, key)
+                        print("{} tagged as deleted.".format(key))
+                        count = 0
+                        count_deleted_obj += 1
+                    count += 1
+                count_obj += 1
 
-        if TAG_RANDOM_OBJECTS:
-            if round((PERCENT * count), 1) >= 100:
-                tag_object_as_deleted(session, BUCKET, key)
-                print("{} tagged as deleted.".format(key))
-                count = 0
-                count_deleted_obj += 1
-            count += 1
-        count_obj += 1
-
-    print("Conclusion:")
-    print("{} objects in {}".format(count_obj, BUCKET))
-    print("{} objects tagged as deleted.".format(count_deleted_obj))
+            print("Conclusion:")
+            print("{} objects in {}".format(count_obj, bucket_name))
+            print("{} objects tagged as deleted.".format(count_deleted_obj))
