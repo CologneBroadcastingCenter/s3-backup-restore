@@ -81,12 +81,17 @@ if __name__ == '__main__':
         'num_download_attempts': 10,
     }
 
+    extra_args = {
+        'StorageClass': 'STANDARD_IA'
+    }
+
     # Getting configuration object for backup processes.
     backup_config = s3br.config.Config(
         SRC_BUCKET,
         DST_BUCKET,
         timeout=TIMEOUT,
         last_modified=LAST_MODIFIED_SINCE,
+        extra_args=extra_args,
         cw_dimension_name=CW_DIMENSION_NAME,
         profile_name=PROFILE,
         region=REGION,

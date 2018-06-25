@@ -5,9 +5,9 @@ from boto3.s3.transfer import TransferConfig
 class Config(object):
     def __init__(self, src_bucket, dst_bucket, access_key=None,
                  secret_key=None, token=None, timeout=120, last_modified=48,
-                 cw_namespace='BackupRecovery', cw_dimension_name='Dev',
-                 profile_name=None, region='eu-central-1',
-                 s3_transfer_manager_conf=None):
+                 extra_args=None, cw_namespace='BackupRecovery',
+                 cw_dimension_name='Dev', profile_name=None,
+                 region='eu-central-1', s3_transfer_manager_conf=None):
         """This class provides an easy to use configuration interface.
         This object is used by all classes of this module.
 
@@ -55,6 +55,7 @@ class Config(object):
         self._dst_bucket = dst_bucket
         self._timeout = timeout
         self._last_modified = last_modified
+        self._extra_args = extra_args
         self._cw_namespace = cw_namespace
         self._cw_dimension_name = cw_dimension_name
         self._profile_name = profile_name
@@ -134,6 +135,14 @@ class Config(object):
     @region.setter
     def region(self, region):
         self._region = region
+
+    @property
+    def extra_args(self):
+        return self._extra_args
+
+    @extra_args.setter
+    def extra_args(self, **kwargs):
+        self._extra_args = kwargs
 
     @property
     def cw_namespace(self):

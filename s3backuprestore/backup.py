@@ -41,12 +41,13 @@ class _Backup(threading.Thread):
         self.dst_bucket = self.config.dst_bucket
         self.cw_namespace = self.config.cw_namespace
         self.cw_dimension_name = self.config.cw_dimension_name
+        self.extra_args = self.config.extra_args
         self.cw_metric_name = cw_metric_name
         self.copy_queue = copy_queue
         self.max_wait = max_wait
         self.daemon = True
-        self._session = config.boto3_session()
-        self._transfer_mgr = config.s3_transfer_manager()
+        self._session = self.config.boto3_session()
+        self._transfer_mgr = self.config.s3_transfer_manager()
 
     def run(self):
         waiter = 1
@@ -72,7 +73,10 @@ class _Backup(threading.Thread):
             cp_src = {'Bucket': self.src_bucket, 'Key': key}
             try:
                 logger.info("{} copying {}".format(self.name, key))
-                dst_obj.copy(cp_src, Config=self._transfer_mgr)
+                dst_obj.copy(
+                    cp_src,
+                    ExtraArgs=self.extra_args,
+                    Config=self._transfer_mgr)
             except ClientError as exc:
                 try:
                     error_code = exc.response['Error']['Code']
