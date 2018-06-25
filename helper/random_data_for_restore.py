@@ -131,23 +131,23 @@ if __name__ == '__main__':
                     sys.exit(127)
             else:
                 print("{}".format(exc.args))
-        else:
-            count_obj = 0
-            count_deleted_obj = 0
-            count = 0
-            for i in range(OBJECT_COUNT):
-                s3_byte_obj = create_objects(MAX_OBJECT_SIZE)
-                key = upload_object(session, bucket_name, s3_byte_obj)
 
-                if TAG_RANDOM_OBJECTS:
-                    if round((PERCENT * count), 1) >= 100:
-                        tag_object_as_deleted(session, bucket_name, key)
-                        print("{} tagged as deleted.".format(key))
-                        count = 0
-                        count_deleted_obj += 1
-                    count += 1
-                count_obj += 1
+        count_obj = 0
+        count_deleted_obj = 0
+        count = 0
+        for i in range(OBJECT_COUNT):
+            s3_byte_obj = create_objects(MAX_OBJECT_SIZE)
+            key = upload_object(session, bucket_name, s3_byte_obj)
 
-            print("Conclusion:")
-            print("{} objects in {}".format(count_obj, bucket_name))
-            print("{} objects tagged as deleted.".format(count_deleted_obj))
+            if TAG_RANDOM_OBJECTS:
+                if round((PERCENT * count), 1) >= 100:
+                    tag_object_as_deleted(session, bucket_name, key)
+                    print("{} tagged as deleted.".format(key))
+                    count = 0
+                    count_deleted_obj += 1
+                count += 1
+            count_obj += 1
+
+        print("Conclusion:")
+        print("{} objects in {}".format(count_obj, bucket_name))
+        print("{} objects tagged as deleted.".format(count_deleted_obj))
