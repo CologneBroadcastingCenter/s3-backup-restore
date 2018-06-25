@@ -9,6 +9,8 @@ import time
 import cmd_args
 import s3backuprestore as s3br
 
+from botocore.exceptions import WaiterError
+
 logging.basicConfig(
     level=logging.ERROR,
     format="%(asctime)s [%(levelname)s] %(module)s %(funcName)s" +
@@ -78,6 +80,33 @@ if __name__ == '__main__':
         profile_name=PROFILE,
         region=REGION,
         s3_transfer_manager_conf=trans_conf)
+
+    count = 60
+    logger.info("Checking if {} exists.".format(DST_BUCKET))
+    while True:
+        try:
+            # Wait until new Bucket is available
+            s3 = restore_config.boto3_session().resource('s3')
+            s3.Bucket(DST_BUCKET).wait_until_exists(
+                WaiterConfig={'Delay': 5, 'MaxAttempts': 12})
+        except WaiterError as exc:
+            if 'Max attempts exceeded' in exc.args[0]:
+                logger.info("Bucket {} does not exist. Please create Bucket! "
+                            "Waiting only {} more minutes."
+                            .format(DST_BUCKET, count - 1))
+            else:
+                logger.exception("Unhandeld error occured while "
+                                 "waiting for Bucket.")
+            count -= 1
+            if count == 0:
+                logger.error("Bucket not created within time. "
+                             "Please create bucket and try again.")
+                logger.warning("Exiting...")
+                sys.exit(127)
+        else:
+            logger.info("Bucket {} exists. Proceeding with restoring."
+                        .format(DST_BUCKET))
+            break
 
     # Getting S3 objects from source bucket
     logger.info("List S3 Keys from {}".format(SRC_BUCKET))
