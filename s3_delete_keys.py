@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-p', '--profile')
-parser.add_argument('-b', '--bucket')
+parser.add_argument('-b', '--buckets', nargs='+')
 parser.add_argument(
     '--delete-objects',
     action='store_true',
@@ -29,7 +29,7 @@ parser.add_argument(
 cmd_args = parser.parse_args()
 
 PROFILE = cmd_args.profile
-BUCKET = cmd_args.bucket
+BUCKETS = cmd_args.buckets
 DELETE_OBJECTS = cmd_args.delete_objects
 DELETE_OBJECT_VERSIONS = cmd_args.delete_object_versions
 DELETE_BUCKET = cmd_args.delete_bucket
@@ -44,16 +44,25 @@ def delete_s3_objects(session, bucket, with_versions=False):
             s3_resource.Bucket(bucket).object_versions.delete()
         else:
             s3_resource.Bucket(bucket).objects.delete()
-    except:
-        logger.exception("")
-        return False
+    except Exception as exc:
+        if exc.args[0].startswith('An error occurred (NoSuchBucket)'):
+            logger.warning("Bucket {} does not exists.".format(bucket))
+        else:
+            print(exc.args[0])
+            # logger.exception("")
     else:
         return True
 
 
 def delete_s3_bucket(session, bucket):
-    bucket = session.resource('s3').Bucket(BUCKET)
-    bucket.delete()
+    try:
+        bucket = session.resource('s3').Bucket(bucket)
+        bucket.delete()
+    except Exception as exc:
+        if exc.args[0] in 'NoSuchBucket':
+            logger.warning("Bucket {} does not exists.".format(bucket))
+        else:
+            logger.exception("")
 
 
 if __name__ == '__main__':
@@ -65,24 +74,35 @@ if __name__ == '__main__':
     else:
         session = boto3.session.Session()
 
-    if DELETE_OBJECTS and DELETE_OBJECT_VERSIONS:
-        answere = input("Are you sure you want to delete ALL keys and its "
-                        "versions in {}?[Y/N]: ".format(BUCKET))
-    elif DELETE_OBJECTS:
-        answere = input("Are you sure you want to delete ALL keys in "
-                        "{}?[Y/N]: ".format(BUCKET))
+    for bucket in BUCKETS:
+        if DELETE_OBJECTS and DELETE_OBJECT_VERSIONS:
+            answere = input("Are you sure you want to delete ALL keys and its "
+                            "versions in {}? Y means Yes for all.[y/Y/N]: "
+                            .format(bucket))
+        elif DELETE_OBJECTS:
+            answere = input("Are you sure you want to delete ALL keys in "
+                            "{}? Y means Yes for all.[y/Y/N]: ".format(bucket))
 
-    if answere.upper() == 'Y':
-        ret = delete_s3_objects(
-            session,
-            BUCKET,
-            with_versions=DELETE_OBJECT_VERSIONS)
-        if ret:
-            print("Deletion completed!")
-    else:
-        print("Aborting!")
-
-    if DELETE_BUCKET:
-        answere = input("Are you sure to delete the {} aswell?".format(BUCKET))
-        if answere.upper() == 'Y':
-            delete_s3_bucket(session, BUCKET)
+        if answere == 'Y':
+            for i in range(len(BUCKETS)):
+                ret = delete_s3_objects(
+                    session,
+                    BUCKETS[i],
+                    with_versions=DELETE_OBJECT_VERSIONS)
+                if DELETE_BUCKET:
+                    delete_s3_bucket(session, BUCKETS[i])
+                if ret:
+                    print("Deletion completed of {}!".format(BUCKETS[i]))
+            else:
+                break
+        elif answere == 'y':
+            ret = delete_s3_objects(
+                session,
+                bucket,
+                with_versions=DELETE_OBJECT_VERSIONS)
+            if DELETE_BUCKET:
+                delete_s3_bucket(session, BUCKETS[i])
+            if ret:
+                print("Deletion completed of {}!".format(bucket))
+        else:
+            print("Aborting!")

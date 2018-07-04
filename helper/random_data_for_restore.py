@@ -72,7 +72,7 @@ def create_bucket(boto3_session, bucket_name):
 
 def upload_object(boto3_session, bucket, byte_object):
     s3 = boto3_session.resource('s3')
-    key = ''.join(choices(string.ascii_uppercase + string.digits, k=50))
+    key = ''.join(choices(string.ascii_lowercase[:6] + string.digits, k=50))
     obj = s3.Object(bucket, key)
     obj.put(
         Body=byte_object
