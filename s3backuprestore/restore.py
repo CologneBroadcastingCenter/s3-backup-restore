@@ -65,7 +65,9 @@ class _Restore(threading.Thread):
 
             # Getting storage class of object.
             try:
-                storage_class = s3.Object(self.src_bucket, key).storage_class
+                obj = s3.Object(self.src_bucket, key)
+                storage_class = obj.storage_class
+                ongoing_req = obj.restore
             except ClientError as exc:
                 try:
                     error_code = exc.response['Error']['Code']
@@ -137,14 +139,18 @@ class _Restore(threading.Thread):
             # If objects storage class equals GLACIER put it into
             # _glacier_queue to process it later.
             if storage_class and 'GLACIER' in storage_class:
-                logger.warning("{} in Glacier. Waiting {}s."
-                               .format(key, waiter))
+                logger.warning("Checking for ongoing-request. "
+                               "If false we will copy {}."
+                               .format(key))
+                if ongoing_req and 'ongoing-request="true"' in ongoing_req:
+                    logger.info("Request is ongoing for {}. "
+                                "Waiting {}s.".format(waiter))
 
-                self.restore_queue.put(key, timeout=self.timeout)
-                # Increasing waiting time
-                time.sleep(waiter)
-                waiter = randint(1, min(self.max_wait, waiter * 4))
-                logger.debug("Next waiting time {}s.".format(waiter))
+                    self.restore_queue.put(key, timeout=self.timeout)
+                    # Increasing waiting time
+                    time.sleep(waiter)
+                    waiter = randint(1, min(self.max_wait, waiter * 4))
+                    logger.debug("Next waiting time {}s.".format(waiter))
             else:
                 # Preparing copy task
                 dst_obj = s3.Object(self.dst_bucket, key)
