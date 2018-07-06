@@ -46,6 +46,7 @@ def put_metric(cw_metric_name, statistic_value, config=None,
         float(statistic_value)
     except ValueError:
         logger.error("Statistic value not convertible to float.")
+        return False
 
     try:
         if statistic_value == 0:

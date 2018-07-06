@@ -176,6 +176,9 @@ class Config(object):
 
         return conf
 
+    # This definition is needed because boto3.session.Session() objects
+    # are not pickable, therefore we need a functionality that provides
+    # a reusable session.
     def boto3_session(self):
         if self._access_key and self._secret_key and self._token:
             session = boto3.session.Session(

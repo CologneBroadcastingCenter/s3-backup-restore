@@ -10,6 +10,99 @@ from .cw import put_metric
 from .log import logger
 
 
+def _get_storage_class(self, s3_client, bucket, key):
+    """Definition will return StorageClass and OngoingReques
+    Args:
+        s3_client (client): S3 client object needed to make requests to S3.
+        bucket (str): Bucket where the objects are stored.
+        key (str): Key in bucket.
+    Returns:
+        [dict]: (StorageClasse, OngoingRequest)
+    """
+    try:
+        obj = s3_client.Object(bucket, key)
+        storage_class = obj.storage_class
+        ongoing_req = obj.restore
+    except ClientError as exc:
+        try:
+            error_code = exc.response['Error']['Code']
+            if 'SlowDown' in error_code:
+                logger.warning("SlowDown occurs. Waiting for {:.2}s"
+                               .format(self.waiter))
+                time.sleep(self.waiter)
+                # Increase maximum of waiting time
+                self.waiter = randint(
+                    1, min(self.max_wait, self.waiter * 4))
+                logger.debug("{}\n Key {}".format(exc.response, key))
+                put_metric('SlowDown', 1, self.config)
+            elif 'InternalError' in error_code:
+                logger.warning("InternalError occurs. Waiting for "
+                               "{:.2}s".format(self.waiter))
+                time.sleep(self.waiter)
+                # Increase maximum of waiting time
+                self.waiter = randint(
+                    1, min(self.max_wait, self.waiter * 4))
+                logger.debug("{}\n Key {}".format(exc.response, key))
+                put_metric(self.cw_metric_name, 1, self.config)
+            else:
+                logger.error("{}\n Key {}".format(exc.response, key))
+                put_metric(self.cw_metric_name, 1, self.config)
+        except KeyError as exc:
+            if "reached max retries" in str(exc.__context__):
+                logger.warning("Max retries reached.")
+                logger.debug(exc.__context__)
+            else:
+                logger.exception("No Error Code in exception response")
+                logger.debug(exc.__context__)
+            self.restore_queue.put(key, timeout=self.timeout)
+            put_metric(self.cw_metric_name, 1, self.config)
+            logger.debug("Error occured sleeping for {:.2}s."
+                         .format(self.waiter))
+            time.sleep(self.waiter)
+            # Increase maximum of waiting time
+            self.waiter = randint(1, min(self.max_wait, self.waiter * 4))
+            logger.debug("Next waiting time {}s.".format(self.waiter))
+        else:
+            logger.error("Put {} back to queue.".format(key))
+            self.restore_queue.put(key, timeout=self.timeout)
+            time.sleep(self.waiter)
+            # Increase maximum of waiting time
+            self.waiter = randint(1, min(self.max_wait, self.waiter * 4))
+            logger.debug("Next waiting time {}s.".format(self.waiter))
+    except EndpointConnectionError as exc:
+        logger.warning("EndpointConnectionError.\n"
+                       "Waiting for {}s.\n"
+                       "Put {} back to queue.\n"
+                       .format(self.waiter, key))
+        put_metric(self.cw_metric_name, 1, self.config)
+        self.restore_queue.put(key, timeout=self.timeout)
+        logger.debug("Error occured sleeping for {}s.".format(self.waiter))
+        time.sleep(self.waiter)
+        # Increase maximum of waiting time
+        self.waiter = randint(1, min(self.max_wait, self.waiter * 4))
+        logger.debug("Next waiting time {}s.".format(self.waiter))
+    except:
+        logger.exception("Unhandeld exception occured.\n "
+                         "Put {} back to queue.".format(key))
+        put_metric(self.cw_metric_name, 1, self.config)
+        self.restore_queue.put(key, timeout=self.timeout)
+        logger.debug("Error occured sleeping for {}s.".format(self.waiter))
+        time.sleep(self.waiter)
+        # Increase maximum of waiting time
+        self.waiter = randint(1, min(self.max_wait, self.waiter * 4))
+        logger.debug("Next waiting time {}s.".format(self.waiter))
+    else:
+        logger.info("Object {} has storage class {}"
+                    .format(key, storage_class))
+        # Reduce waiting time
+        self.waiter = max(round(self.waiter * 0.8), 1)
+        logger.debug("Reduced waiting time to {}s.".format(self.waiter))
+        return {
+            'StorageClass': storage_class,
+            'OngoingRequest': ongoing_req
+        }
+
+
 class _Restore(threading.Thread):
     def __init__(self, config, restore_queue, max_wait=300,
                  cw_metric_name='RestoreObjectsErrors'):
@@ -31,6 +124,7 @@ class _Restore(threading.Thread):
         self.cw_metric_name = cw_metric_name
         self.restore_queue = restore_queue
         self.max_wait = max_wait
+        self.waiter = 1
         self.daemon = True
         self._session = config.boto3_session()
         self._transfer_mgr = config.s3_transfer_manager()
@@ -45,7 +139,6 @@ class _Restore(threading.Thread):
         multipart upload and retry is needed.
         """
 
-        waiter = 1
         try:
             s3 = self._session.resource('s3')
         except:
@@ -63,77 +156,9 @@ class _Restore(threading.Thread):
                 logger.warning("Restore queue seems empty. Checking again.")
                 continue
 
-            # Getting storage class of object.
-            try:
-                obj = s3.Object(self.src_bucket, key)
-                storage_class = obj.storage_class
-                ongoing_req = obj.restore
-            except ClientError as exc:
-                try:
-                    error_code = exc.response['Error']['Code']
-                    if 'SlowDown' in error_code:
-                        logger.warning("SlowDown occurs. Waiting for {}s"
-                                       .format(waiter))
-                        logger.debug("{}\n Key {}".format(exc.response, key))
-                        put_metric('SlowDown', 1, self.config)
-                    elif 'InternalError' in error_code:
-                        logger.warning("InternalError occurs. Waiting for "
-                                       "{}s".format(waiter))
-                        logger.debug("{}\n Key {}".format(exc.response, key))
-                        put_metric(self.cw_metric_name, 1, self.config)
-                    else:
-                        logger.error("{}\n Key {}".format(exc.response, key))
-                        put_metric(self.cw_metric_name, 1, self.config)
-                except KeyError as exc:
-                    if "reached max retries" in str(exc.__context__):
-                        logger.warning("Max retries reached.")
-                        logger.debug(exc.__context__)
-                    else:
-                        logger.exception("No Error Code in exception response")
-                        logger.debug(exc.__context__)
-                    self.restore_queue.put(key, timeout=self.timeout)
-                    put_metric(self.cw_metric_name, 1, self.config)
-                    logger.debug("Error occured sleeping for {}s."
-                                 .format(waiter))
-                    time.sleep(waiter)
-                    # Increase waiting time
-                    waiter = randint(1, min(self.max_wait, waiter * 4))
-                    logger.debug("Next waiting time {}s.".format(waiter))
-                else:
-                    logger.error("Put {} back to queue.".format(key))
-                    self.restore_queue.put(key, timeout=self.timeout)
-                    time.sleep(waiter)
-                    # Increase waiting time
-                    waiter = randint(1, min(self.max_wait, waiter * 4))
-                    logger.debug("Next waiting time {}s.".format(waiter))
-            except EndpointConnectionError as exc:
-                logger.warning("EndpointConnectionError.\n"
-                               "Waiting for {}s.\n"
-                               "Put {} back to queue.\n"
-                               .format(waiter, key))
-                put_metric(self.cw_metric_name, 1, self.config)
-                self.restore_queue.put(key, timeout=self.timeout)
-                logger.debug("Error occured sleeping for {}s.".format(waiter))
-                time.sleep(waiter)
-                # Increase waiting time
-                waiter = randint(1, min(self.max_wait, waiter * 4))
-                logger.debug("Next waiting time {}s.".format(waiter))
-            except:
-                logger.exception("Unhandeld exception occured.\n \
-                                 Put {} back to queue.".format(key))
-                put_metric(self.cw_metric_name, 1, self.config)
-                self.restore_queue.put(key, timeout=self.timeout)
-                logger.debug("Error occured sleeping for {}s.".format(waiter))
-                time.sleep(waiter)
-                # Increase waiting time
-                waiter = randint(1, min(self.max_wait, waiter * 4))
-                logger.debug("Next waiting time {}s.".format(waiter))
-            else:
-                logger.info("Object {} has storage class {}"
-                            .format(key, storage_class))
-                # Reduce waiting time
-                waiter = max(round(waiter * 0.8), 1)
-                logger.debug("Reduced waiting time to {}s.".format(waiter))
+            ret = _get_storage_class(s3, self.src_bucket, key)
+            storage_class = ret.get('StorageClass', None)
+            ongoing_req = ret.get('OngoingRequest', None)
 
             # Checking objects storage class.
             # If objects storage class equals GLACIER put it into
@@ -145,13 +170,13 @@ class _Restore(threading.Thread):
                (not ongoing_req or 'ongoing-request="true"' in ongoing_req)):
 
                 logger.info("Request is ongoing for {}. "
-                            "Waiting {}s.".format(key, waiter))
+                            "Waiting {}s.".format(key, self.waiter))
 
                 self.restore_queue.put(key, timeout=self.timeout)
                 # Increasing waiting time
-                time.sleep(waiter)
-                waiter = randint(1, min(self.max_wait, waiter * 4))
-                logger.debug("Next waiting time {}s.".format(waiter))
+                time.sleep(self.waiter)
+                self.waiter = randint(1, min(self.max_wait, self.waiter * 4))
+                logger.debug("Next waiting time {}s.".format(self.waiter))
             else:
                 # Preparing copy task
                 dst_obj = s3.Object(self.dst_bucket, key)
@@ -165,13 +190,13 @@ class _Restore(threading.Thread):
                         if 'SlowDown' in error_code:
                             logger.warning("SlowDown occurs. "
                                            "Waiting for {:.0f}s"
-                                           .format(waiter))
+                                           .format(self.waiter))
                             logger.debug("{}\n Key {}"
                                          .format(exc.response, key))
                             put_metric('SlowDown', 1, self.config)
                         elif 'InternalError' in error_code:
                             logger.warning("InternalError occurs. Waiting for "
-                                           "{:.0f}s".format(waiter))
+                                           "{:.0f}s".format(self.waiter))
                             put_metric(self.cw_metric_name, 1, self.config)
                             logger.debug("{}\n Key {}"
                                          .format(exc.response, key))
@@ -190,58 +215,66 @@ class _Restore(threading.Thread):
                         self.restore_queue.put(key)
                         put_metric(self.cw_metric_name, 1, self.config)
                         logger.debug("Error occured sleeping for {}s."
-                                     .format(waiter))
-                        time.sleep(waiter)
-                        # Increase waiting time
-                        waiter = randint(1, min(self.max_wait, waiter * 4))
-                        logger.debug("Next waiting time {}s.".format(waiter))
+                                     .format(self.waiter))
+                        time.sleep(self.waiter)
+                        # Increase maximum of waiting time
+                        self.waiter = randint(
+                            1, min(self.max_wait, self.waiter * 4))
+                        logger.debug("Next waiting time {}s."
+                                     .format(self.waiter))
                     else:
                         logger.error("Put {} back to queue.".format(key))
                         self.restore_queue.put(key, timeout=self.timeout)
                         logger.debug("Error occured sleeping for {}s."
-                                     .format(waiter))
-                        time.sleep(waiter)
-                        # Increase waiting time
-                        waiter = randint(1, min(self.max_wait, waiter * 4))
-                        logger.debug("Next waiting time {}s.".format(waiter))
+                                     .format(self.waiter))
+                        time.sleep(self.waiter)
+                        # Increase maximum of waiting time
+                        self.waiter = randint(
+                            1, min(self.max_wait, self.waiter * 4))
+                        logger.debug("Next waiting time {}s."
+                                     .format(self.waiter))
                 except ConnectionRefusedError as exc:
                     logger.exception("Waiting for {:.0f}s.\n"
                                      "Put {} back to queue.\n"
                                      "Maybe to many connections?"
-                                     .format(waiter, key))
+                                     .format(self.waiter, key))
                     put_metric(self.cw_metric_name, 1, self.config)
                     self.restore_queue.put(key, timeout=self.timeout)
                     logger.debug("Error occured sleeping for {}s."
-                                 .format(waiter))
-                    time.sleep(waiter)
-                    waiter = randint(1, min(self.max_wait, waiter * 4))
-                    logger.debug("Next waiting time {}s.".format(waiter))
+                                 .format(self.waiter))
+                    time.sleep(self.waiter)
+                    self.waiter = randint(
+                        1, min(self.max_wait, self.waiter * 4))
+                    logger.debug("Next waiting time {}s.".format(self.waiter))
                 except EndpointConnectionError as exc:
                     logger.warning("EndpointConnectionError.\n"
                                    "Waiting for {:.0f}s.\n"
                                    "Put {} back to queue.\n"
-                                   .format(waiter, key))
+                                   .format(self.waiter, key))
                     put_metric(self.cw_metric_name, 1, self.config)
                     self.restore_queue.put(key, timeout=self.timeout)
                     logger.debug("Error occured sleeping for {}s."
-                                 .format(waiter))
-                    time.sleep(waiter)
-                    waiter = randint(1, min(self.max_wait, waiter * 4))
-                    logger.debug("Next waiting time {}s.".format(waiter))
+                                 .format(self.waiter))
+                    time.sleep(self.waiter)
+                    self.waiter = randint(
+                        1, min(self.max_wait, self.waiter * 4))
+                    logger.debug("Next waiting time {}s.".format(self.waiter))
                 except:
                     logger.exception("Unhandeld exception occured.\n "
                                      "Put {} back to queue.".format(key))
                     put_metric(self.cw_metric_name, 1, self.config)
                     self.restore_queue.put(key, timeout=self.timeout)
                     logger.debug("Error occured sleeping for {}s."
-                                 .format(waiter))
-                    waiter = randint(1, min(self.max_wait, waiter * 4))
-                    logger.debug("Next waiting time {}s.".format(waiter))
+                                 .format(self.waiter))
+                    self.waiter = randint(
+                        1, min(self.max_wait, self.waiter * 4))
+                    logger.debug("Next waiting time {}s.".format(self.waiter))
                 else:
                     logger.info("{} copied {}".format(self.name, key))
                     # Reduce waiting time
-                    waiter = max(round(waiter * 0.8), 1)
-                    logger.debug("Reduced waiting time to {}s.".format(waiter))
+                    self.waiter = max(round(self.waiter * 0.8), 1)
+                    logger.debug("Reduced waiting time to {}s."
+                                 .format(self.waiter))
 
 
 class MpRestore(multiprocessing.Process):

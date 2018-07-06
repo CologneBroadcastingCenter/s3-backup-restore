@@ -161,6 +161,8 @@ class MpCompare(multiprocessing.Process):
             th_lst = list()
             logger.info("{} starting {} threads."
                         .format(self.name, thread_count))
+
+            # Starts number of threads specified in thread count.
             for t in range(thread_count):
                 th_lst.append(_Compare(
                     self.config,

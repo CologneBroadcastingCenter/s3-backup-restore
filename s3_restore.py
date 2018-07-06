@@ -91,9 +91,10 @@ if __name__ == '__main__':
                 WaiterConfig={'Delay': 5, 'MaxAttempts': 12})
         except WaiterError as exc:
             if 'Max attempts exceeded' in exc.args[0]:
-                logger.info("Bucket {} does not exist. Please create Bucket! "
-                            "Waiting only {} more minutes."
-                            .format(DST_BUCKET, count - 1))
+                logger.warning("Bucket {} does not exist. "
+                               "Please create Bucket! "
+                               "Waiting only {} more minutes."
+                               .format(DST_BUCKET, count - 1))
             else:
                 logger.exception("Unhandeld error occured while "
                                  "waiting for Bucket.")
@@ -116,9 +117,15 @@ if __name__ == '__main__':
         objects_count=OBJECTS_COUNT)
     logger.info("{} objects in {}.".format(len(src_obj), SRC_BUCKET))
 
-    if ALL:
+    # If either --all is set or --check-deleted-tag is not set.
+    # All objects will be copied from source bucket to destination bucket.
+    # No checks like checking if object is tagged as deleted will happen.
+    if ALL or not CHECK_DELETED_TAG:
         [restore_queue.put(o) for o in src_obj]
         logger.info("{} objects to restore".format(restore_queue.qsize()))
+    # If --check-deleted-tag is set, script will check if S3 object has
+    # TagSet Key: Deleted, Value: True set. Only those who are not tagged as
+    # mentioned will be put to restore queue and will be copied.
     elif CHECK_DELETED_TAG:
         [check_deleted_q.put(o) for o in src_obj]
         check_deleted_q_size = check_deleted_q.qsize()

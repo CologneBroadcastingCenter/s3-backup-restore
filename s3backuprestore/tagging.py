@@ -15,7 +15,7 @@ class _CheckDeletedTag(threading.Thread):
                  cw_metric_name='CheckDeletedTaggsErrors'):
         """Checks if S3 objects are tagged as Deleted.
 
-        If objects are tagged as Deleted and its value is True, it would not
+        If objects are tagged as Key: Deleted, Value: True, it would not
         put these objects into global queue.
 
         Args:

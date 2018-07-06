@@ -105,7 +105,7 @@ class _Backup(threading.Thread):
                     logger.debug("Error occured sleeping for {}s."
                                  .format(waiter))
                     time.sleep(waiter)
-                    # Increase waiting time
+                    # Increase maximum of waiting time
                     waiter = randint(1, min(self.max_wait, waiter * 4))
                     logger.debug("Next waiting time {}s.".format(waiter))
                 else:
@@ -114,7 +114,7 @@ class _Backup(threading.Thread):
                     logger.debug("Error occured sleeping for {}s."
                                  .format(waiter))
                     time.sleep(waiter)
-                    # Increase waiting time
+                    # Increase maximum of waiting time
                     waiter = randint(1, min(self.max_wait, waiter * 4))
                     logger.debug("Next waiting time {}s.".format(waiter))
             except ConnectionRefusedError as exc:

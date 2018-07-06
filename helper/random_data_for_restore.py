@@ -102,10 +102,6 @@ def tag_object_as_deleted(boto3_session, bucket, key):
     )
 
 
-def create_objects(obj_size):
-    return urandom(randint(1024**2, obj_size * 1024**2))
-
-
 if __name__ == '__main__':
     if PROFILE:
         session = boto3.session.Session(profile_name=PROFILE)
@@ -140,7 +136,7 @@ if __name__ == '__main__':
         count_deleted_obj = 0
         count = 0
         for i in range(OBJECT_COUNT):
-            s3_byte_obj = create_objects(MAX_OBJECT_SIZE)
+            s3_byte_obj = urandom(randint(1024**2, MAX_OBJECT_SIZE * 1024**2))
             key = upload_object(session, bucket_name, s3_byte_obj)
 
             if TAG_RANDOM_OBJECTS:
