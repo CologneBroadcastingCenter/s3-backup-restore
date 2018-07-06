@@ -1,5 +1,7 @@
 SHELL = /bin/sh
 
+.DEFAULT_GOAL := login
+
 login:
 		`aws --profile ${PROFILE} ecr get-login --no-include-email --region eu-central-1`
 

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# This script creates dummy data by reading from urandom and upload
+# it into S3 buckets. You can directly create new S3 buckets by specifying
+# number of buckets.
+
 import argparse
 import boto3
 import string

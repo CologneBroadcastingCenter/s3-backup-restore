@@ -138,19 +138,20 @@ class _Restore(threading.Thread):
             # Checking objects storage class.
             # If objects storage class equals GLACIER put it into
             # _glacier_queue to process it later.
-            if storage_class and 'GLACIER' in storage_class:
-                logger.warning("Checking for ongoing-request. "
-                               "If false we will copy {}."
-                               .format(key))
-                if ongoing_req and 'ongoing-request="true"' in ongoing_req:
-                    logger.info("Request is ongoing for {}. "
-                                "Waiting {}s.".format(waiter))
+            logger.warning("Checking if object is in GLACIER and "
+                           "ongoing-request is false for {}."
+                           .format(key))
+            if (storage_class and 'GLACIER' in storage_class and
+               (not ongoing_req or 'ongoing-request="true"' in ongoing_req)):
 
-                    self.restore_queue.put(key, timeout=self.timeout)
-                    # Increasing waiting time
-                    time.sleep(waiter)
-                    waiter = randint(1, min(self.max_wait, waiter * 4))
-                    logger.debug("Next waiting time {}s.".format(waiter))
+                logger.info("Request is ongoing for {}. "
+                            "Waiting {}s.".format(key, waiter))
+
+                self.restore_queue.put(key, timeout=self.timeout)
+                # Increasing waiting time
+                time.sleep(waiter)
+                waiter = randint(1, min(self.max_wait, waiter * 4))
+                logger.debug("Next waiting time {}s.".format(waiter))
             else:
                 # Preparing copy task
                 dst_obj = s3.Object(self.dst_bucket, key)
