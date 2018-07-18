@@ -1,9 +1,25 @@
 SHELL = /bin/sh
+.DEFAULT := help
 
-.DEFAULT_GOAL := login
+help:
+		@echo "This Makefile helps building and deploying new docker container"
+		@echo "for backing up and restoring objects from source bucket"
+		@echo "to destination bucket Following targets are available."
+		@echo ""
+		@echo "Target Logging in to ECR:"
+		@echo "\tloging"
+		@echo ""
+		@echo "Target for building docker container:"
+		@echo "\tbuild"
+		@echo ""
+		@echo "Targets to build tagged container and push to ECR:"
+		@echo "\tstaging, prod"
+		@echo ""
+		@echo "Target that will do all the work at once:"
+		@echo "\tdeploy"
 
 login:
-		`aws --profile ${PROFILE} ecr get-login --no-include-email --region eu-central-1`
+		`aws --profile $(or $(PROFILE), rin-tvnow-backup-prod) ecr get-login --no-include-email --region eu-central-1`
 
 build:
 		docker build --no-cache -t cbc/clouds/s3-backup-restore .
