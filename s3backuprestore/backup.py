@@ -45,6 +45,8 @@ class _Backup(threading.Thread):
         self.cw_metric_name = cw_metric_name
         self.copy_queue = copy_queue
         self.max_wait = max_wait
+        # Sets the thred in daemon mode. See:
+        # https://docs.python.org/3/library/threading.html#threading.Thread.daemon
         self.daemon = True
         self._session = self.config.boto3_session()
         self._transfer_mgr = self.config.s3_transfer_manager()

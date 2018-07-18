@@ -51,15 +51,15 @@ class Config(object):
         self._access_key = access_key
         self._secret_key = secret_key
         self._token = token
-        self._src_bucket = src_bucket
-        self._dst_bucket = dst_bucket
-        self._timeout = timeout
-        self._last_modified = last_modified
+        self.src_bucket = src_bucket
+        self.dst_bucket = dst_bucket
+        self.timeout = timeout
+        self.last_modified = last_modified
         self._extra_args = extra_args
-        self._cw_namespace = cw_namespace
-        self._cw_dimension_name = cw_dimension_name
+        self.cw_namespace = cw_namespace
+        self.cw_dimension_name = cw_dimension_name
         self._profile_name = profile_name
-        self._region = region
+        self.region = region
         self._s3_transfer_manager_conf = s3_transfer_manager_conf
 
     @property
@@ -76,7 +76,7 @@ class Config(object):
             return self._secret_key
         else:
             self.get_credentials()
-            self._secret_key
+            return self._secret_key
 
     @property
     def token(self):
@@ -84,38 +84,7 @@ class Config(object):
             return self._token
         else:
             self.get_credentials()
-
-    @property
-    def src_bucket(self):
-        return self._src_bucket
-
-    @src_bucket.setter
-    def src_bucket(self, bucket):
-        self._src_bucket = bucket
-
-    @property
-    def dst_bucket(self):
-        return self._dst_bucket
-
-    @dst_bucket.setter
-    def dst_bucket(self, bucket):
-        self._dest_bucket = bucket
-
-    @property
-    def timeout(self):
-        return self._timeout
-
-    @timeout.setter
-    def timeout(self, timeout):
-        self._timeout = timeout
-
-    @property
-    def last_modified(self):
-        return self._last_modified
-
-    @last_modified.setter
-    def last_modified(self, last_modified):
-        self._last_modified = last_modified
+            return self._token
 
     @property
     def profile_name(self):
@@ -129,36 +98,12 @@ class Config(object):
         self._token = None
 
     @property
-    def region(self):
-        return self._region
-
-    @region.setter
-    def region(self, region):
-        self._region = region
-
-    @property
     def extra_args(self):
         return self._extra_args
 
     @extra_args.setter
     def extra_args(self, **kwargs):
         self._extra_args = kwargs
-
-    @property
-    def cw_namespace(self):
-        return self._cw_namespace
-
-    @cw_namespace.setter
-    def cw_namespace(self, cw_namespace):
-        self._cw_namespace = cw_namespace
-
-    @property
-    def cw_dimension_name(self):
-        return self._cw_dimension_name
-
-    @cw_dimension_name.setter
-    def cw_dimension_name(self, cw_dimension_name):
-        self._cw_dimension_name = cw_dimension_name
 
     @property
     def s3_transfer_manager_conf(self):

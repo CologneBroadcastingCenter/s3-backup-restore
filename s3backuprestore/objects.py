@@ -2,15 +2,13 @@
 
 import sys as sys
 import time as time
-from random import shuffle
 
 from .config import Config
 from .log import logger
 from .cw import put_metric
 
 
-def get_objects(bucket, config=None, cw_metric_name=None, shuffle_list=True,
-                objects_count=None):
+def get_objects(bucket, config=None, cw_metric_name=None, objects_count=None):
     """Returns objects from bucket and returns them as a list
 
     Args:
@@ -59,10 +57,6 @@ def get_objects(bucket, config=None, cw_metric_name=None, shuffle_list=True,
     except:
         logger.exception("")
         sys.exit(127)
-    else:
-        if shuffle_list:
-            shuffle(keys)
-        return keys
 
 
 def delete_objects(bucket, config=None, with_versions=False):

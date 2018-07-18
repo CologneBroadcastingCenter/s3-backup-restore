@@ -3,6 +3,7 @@
 import argparse
 import logging
 import multiprocessing as mp
+import os
 import sys
 import time
 
@@ -59,6 +60,9 @@ elif VERBOSE and VERBOSE == 2:
 elif VERBOSE and VERBOSE >= 3:
     logger.setLevel(logging.DEBUG)
     s3br_logger.setLevel(logging.DEBUG)
+
+if not PROFILE:
+    PROFILE = os.getenv('AWS_PROFILE', None)
 
 if __name__ == '__main__':
     manager = mp.Manager()

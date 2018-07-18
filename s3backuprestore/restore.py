@@ -32,6 +32,8 @@ class _Restore(threading.Thread):
         self.restore_queue = restore_queue
         self.max_wait = max_wait
         self.waiter = 1
+        # Sets the thred in daemon mode. See:
+        # https://docs.python.org/3/library/threading.html#threading.Thread.daemon
         self.daemon = True
         self._session = config.boto3_session()
         self._transfer_mgr = config.s3_transfer_manager()
@@ -70,8 +72,8 @@ class _Restore(threading.Thread):
             # Checking objects storage class.
             # If objects storage class equals GLACIER put it into
             # _glacier_queue to process it later.
-            logger.warning("Checking if object is in GLACIER and "
-                           f"ongoing-request is false for {key}.")
+            logger.info("Checking if object is in GLACIER and "
+                        f"ongoing-request is false for {key}.")
             if (storage_class and 'GLACIER' in storage_class and
                (not ongoing_req or 'ongoing-request="true"' in ongoing_req)):
 

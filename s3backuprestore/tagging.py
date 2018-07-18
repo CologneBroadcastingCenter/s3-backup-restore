@@ -34,6 +34,8 @@ class _CheckDeletedTag(threading.Thread):
         self.check_deleted_tag_queue = check_deleted_tag_queue
         self.restore_queue = restore_queue
         self.cw_metric_name = cw_metric_name
+        # Sets the thred in daemon mode. See:
+        # https://docs.python.org/3/library/threading.html#threading.Thread.daemon
         self.daemon = True
         self._session = config.boto3_session()
         self._transfer_mgr = config.s3_transfer_manager()

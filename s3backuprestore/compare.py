@@ -51,6 +51,8 @@ class _Compare(threading.Thread):
         self.compare_queue = compare_queue
         self.copy_queue = copy_queue
         self.max_wait = max_wait
+        # Sets the thred in daemon mode. See:
+        # https://docs.python.org/3/library/threading.html#threading.Thread.daemon
         self.daemon = True
         self._session = config.boto3_session()
 
@@ -189,6 +191,12 @@ class MpCompare(multiprocessing.Process):
                 sys.exit(127)
 
             logger.info("{} joining all threads.".format(self.name))
+            # This loop checks if threads are alive. If so the loop will wait
+            # for 60s and will check the thread again. A thread mustn't be
+            # alive to be joined if a thread keeps alive and we try to join
+            # it it will lock the script until exiting it the hard way.
+            # Therefor I want get information about when threads still
+            # keeping alive.
             for t in range(thread_count):
                 logger.debug("{} waiting for {} to be finished."
                              .format(self.name, th_lst[t].name))

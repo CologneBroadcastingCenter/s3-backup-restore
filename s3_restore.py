@@ -3,6 +3,7 @@
 import argparse
 import logging
 import multiprocessing as mp
+import os
 import sys
 import time
 
@@ -51,36 +52,11 @@ elif VERBOSE and VERBOSE >= 3:
     logger.setLevel(logging.DEBUG)
     s3br_logger.setLevel(logging.DEBUG)
 
-if __name__ == '__main__':
-    manager = mp.Manager()
-    restore_queue = manager.Queue()
-    check_deleted_q = manager.Queue()
+if not PROFILE:
+    PROFILE = os.getenv('AWS_PROFILE', None)
 
-    # Try to set start method of multiprocessing
-    # environment to spawn. Spawn context is threadsafe
-    # and copies only mandatory data to each process.
-    try:
-        mp.set_start_method('spawn')
-        logger.info("Context was set to 'spawn'.")
-    except RuntimeError:
-        logger.warning("Context already set to 'spawn'.")
 
-    trans_conf = {
-        'multipart_threshold': 52428800,
-        'multipart_chunksize': 26214400,
-        'num_download_attempts': 10,
-    }
-
-    # Getting configuration object for restore processes.
-    restore_config = s3br.config.Config(
-        SRC_BUCKET,
-        DST_BUCKET,
-        timeout=TIMEOUT,
-        cw_dimension_name=CW_DIMENSION_NAME,
-        profile_name=PROFILE,
-        region=REGION,
-        s3_transfer_manager_conf=trans_conf)
-
+def check_create_s3_bucket():
     count = 60
     logger.info("Checking if {} exists.".format(DST_BUCKET))
     while True:
@@ -108,6 +84,43 @@ if __name__ == '__main__':
             logger.info("Bucket {} exists. Proceeding with restoring."
                         .format(DST_BUCKET))
             break
+
+
+if __name__ == '__main__':
+    manager = mp.Manager()
+    restore_queue = manager.Queue()
+    check_deleted_q = manager.Queue()
+
+    # Try to set start method of multiprocessing
+    # environment to spawn. Spawn context is threadsafe
+    # and copies only mandatory data to each process.
+    try:
+        mp.set_start_method('spawn')
+        logger.info("Context was set to 'spawn'.")
+    except RuntimeError:
+        logger.warning("Context already set to 'spawn'.")
+
+    # Those values are configuration options for s3_transfer_manager_conf
+    # in multipart upload processes. See:
+    # https://boto3.readthedocs.io/en/latest/reference/customizations/s3.html
+    trans_conf = {
+        'multipart_threshold': 52428800,
+        'multipart_chunksize': 26214400,
+        'num_download_attempts': 10,
+    }
+
+    # Getting configuration object for restore processes.
+    restore_config = s3br.config.Config(
+        SRC_BUCKET,
+        DST_BUCKET,
+        timeout=TIMEOUT,
+        cw_dimension_name=CW_DIMENSION_NAME,
+        profile_name=PROFILE,
+        region=REGION,
+        s3_transfer_manager_conf=trans_conf)
+
+    # Check if destination bucket exists, if not exit the program
+    check_create_s3_bucket()
 
     # Getting S3 objects from source bucket
     logger.info("List S3 Keys from {}".format(SRC_BUCKET))
