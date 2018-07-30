@@ -133,9 +133,9 @@ class Config(object):
         elif self._profile_name:
             session = boto3.session.Session(
                 profile_name=self._profile_name,
-                region_name=self._region)
+                region_name=self.region)
         else:
-            session = boto3.session.Session(region_name=self._region)
+            session = boto3.session.Session(region_name=self.region)
 
         creds = session.get_credentials()
         self._access_key = creds.access_key

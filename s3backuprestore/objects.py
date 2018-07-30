@@ -34,7 +34,7 @@ def get_objects(bucket, config=None, cw_metric_name=None, objects_count=None):
             session = config.boto3_session()
         else:
             session = Config.boto3_session()
-    except:
+    except Exception as exc:
         logger.exception("")
         sys.exit(127)
 
@@ -54,9 +54,11 @@ def get_objects(bucket, config=None, cw_metric_name=None, objects_count=None):
             put_metric(cw_metric_name, len(keys), config=config)
 
         logger.info("Summary of received objects {}.".format(len(keys)))
-    except:
+    except Exception as exc:
         logger.exception("")
         sys.exit(127)
+    else:
+        return keys
 
 
 def delete_objects(bucket, config=None, with_versions=False):
