@@ -26,6 +26,8 @@ parser.add_argument(
     '--check-deleted-tag',
     action='store_true',
     help='Restore objects which are not tagged as deleted.'
+         '(env: CHECK_DELETED_TAG)',
+    **cmd_args.env_or_required_arg('CHECK_DELETED_TAG', required=False)
 )
 cmd_args = parser.parse_args()
 
@@ -38,7 +40,7 @@ OBJECTS_COUNT = cmd_args.objects_count
 PROFILE = cmd_args.profile
 REGION = cmd_args.region
 SRC_BUCKET = cmd_args.source_bucket
-THREAD_COUNT = cmd_args.thread_count
+THREAD_COUNT = cmd_args.thread_count_per_proc
 TIMEOUT = cmd_args.timeout
 VERBOSE = cmd_args.verbose
 

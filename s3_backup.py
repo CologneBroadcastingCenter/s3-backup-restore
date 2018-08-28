@@ -22,19 +22,19 @@ logger = logging.getLogger(__name__)
 parser = argparse.ArgumentParser(parents=[cmd_args.parser])
 parser.add_argument(
     '--last-modified-since',
-    default=48,
     type=int,
-    help='Compare bucket objects if they ' +
-         'where modified since the last given hours.',
-    required=False,
-    metavar='N'
-)
+    metavar='N',
+    help='Compare bucket objects if they '
+         'where modified since the last given hours. '
+         '(env: LAST_MODIFIED_SINCE, default=48)',
+    **cmd_args.env_or_required_arg('LAST_MODIFIED_SINCE', default=48))
 parser.add_argument(
     '--tag-deleted',
     action='store_true',
-    help='Tag all objects that are deleted in source bucket' +
-         'but still present in backup bucket.'
-)
+    help='Tag all objects that are deleted in source bucket'
+         'but still present in backup bucket. '
+         '(env: TAG_DELETED)',
+    **cmd_args.env_or_required_arg('TAG_DELETED', required=False))
 cmd_args = parser.parse_args()
 
 ALL = cmd_args.all
@@ -46,7 +46,7 @@ PROFILE = cmd_args.profile
 REGION = cmd_args.region
 SRC_BUCKET = cmd_args.source_bucket
 TAG_DELETED = cmd_args.tag_deleted
-THREAD_COUNT = cmd_args.thread_count
+THREAD_COUNT = cmd_args.thread_count_per_proc
 TIMEOUT = cmd_args.timeout
 VERBOSE = cmd_args.verbose
 CW_DIMENSION_NAME = cmd_args.cloudwatch_dimension_name
