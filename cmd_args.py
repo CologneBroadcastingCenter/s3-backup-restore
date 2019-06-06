@@ -84,6 +84,12 @@ parser.add_argument(
     **env_or_required_arg('AWS_PROFILE', required=False)
 )
 parser.add_argument(
+    '--dst-bucket-role',
+    help="AWS role for writing to the destionination bucket. "
+         "(environment: DST_BUCKET_ROLE)",
+    **env_or_required_arg('DST_BUCKET_ROLE', required=False)
+)
+parser.add_argument(
     '--region',
     help="The AWS region to use. "
          "(environment: AWS_REGION, default: eu-central-1)",

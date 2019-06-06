@@ -5,6 +5,7 @@ import threading
 import time
 from random import randint
 from botocore.exceptions import ClientError, EndpointConnectionError
+import boto3
 
 from .cw import put_metric
 from .log import logger
@@ -26,6 +27,7 @@ class _Restore(threading.Thread):
         self.timeout = self.config.timeout
         self.src_bucket = self.config.src_bucket
         self.dst_bucket = self.config.dst_bucket
+        self.dst_bucket_role = self.config.dst_bucket_role
         self.cw_namespace = self.config.cw_namespace
         self.cw_dimension_name = self.config.cw_dimension_name
         self.cw_metric_name = cw_metric_name
@@ -49,7 +51,9 @@ class _Restore(threading.Thread):
         """
 
         try:
+
             s3 = self._session.resource('s3')
+
         except Exception as exc:
             logger.exception("")
             put_metric(self.cw_metric_name, 1, self.config)
@@ -75,7 +79,7 @@ class _Restore(threading.Thread):
             logger.info("Checking if object is in GLACIER and "
                         f"ongoing-request is false for {key}.")
             if (storage_class and 'GLACIER' in storage_class and
-               (not ongoing_req or 'ongoing-request="true"' in ongoing_req)):
+                    (not ongoing_req or 'ongoing-request="true"' in ongoing_req)):
 
                 logger.info(f"Request is ongoing for {key}. "
                             f"Waiting {self.waiter}s.")
@@ -87,7 +91,28 @@ class _Restore(threading.Thread):
                 logger.debug(f"Next waiting time {self.waiter}s.")
             else:
                 # Preparing copy task
-                dst_obj = s3.Object(self.dst_bucket, key)
+                if (self.dst_bucket_role):
+                    logger.debug(
+                        f"dst_bucket_role:  {self.dst_bucket_role}")
+                    self.s3_dst_sts = self._session.client('sts')
+                    self.s3_dst_assume_role_object = self.s3_dst_sts.assume_role(
+                        RoleArn=self.dst_bucket_role, RoleSessionName="DST_BUCKET_ROLE", DurationSeconds=3600)
+                    self.dst_credentials = self.s3_dst_assume_role_object['Credentials']
+                    self.dst_tmp_access_key = self.dst_credentials['AccessKeyId']
+                    self.dst_tmp_secret_key = self.dst_credentials['SecretAccessKey']
+                    self.dst_tmp_security_token = self.dst_credentials['SessionToken']
+                    self.dst_session = boto3.session.Session(
+                        aws_access_key_id=self.dst_tmp_access_key,
+                        aws_secret_access_key=self.dst_tmp_secret_key, aws_session_token=self.dst_tmp_security_token
+                    )
+                    s3_dst = self.dst_session.resource('s3')
+
+                    logger.info("copy with assume role of dst_bucket")
+                    dst_obj = s3_dst.Object(self.dst_bucket, key)
+                else:
+                    logger.info("copy without assume role of dst_bucket")
+                    dst_obj = s3.Object(self.dst_bucket, key)
+
                 cp_src = {'Bucket': self.src_bucket, 'Key': key}
                 try:
                     logger.info(f"{self.name} copying {key}")
@@ -107,7 +132,8 @@ class _Restore(threading.Thread):
                             put_metric(self.cw_metric_name, 1, self.config)
                             logger.debug(f"{exc.response}\n Key {key}")
                         else:
-                            logger.error(f"{exc.response}\n Key {key}")
+                            logger.error(
+                                f"{exc.response}\n Key {key} \n Exception: {exc}")
                             put_metric(self.cw_metric_name, 1, self.config)
                     except KeyError:
                         if "reached max retries" in str(exc.__context__):
