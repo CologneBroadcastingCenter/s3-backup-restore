@@ -1,6 +1,7 @@
 import multiprocessing
 import queue
 import sys
+import os
 import threading
 import time
 from random import randint
@@ -28,6 +29,7 @@ class _Restore(threading.Thread):
         self.src_bucket = self.config.src_bucket
         self.dst_bucket = self.config.dst_bucket
         self.dst_bucket_role = self.config.dst_bucket_role
+        self.target_profile = self.config.target_profile
         self.cw_namespace = self.config.cw_namespace
         self.cw_dimension_name = self.config.cw_dimension_name
         self.cw_metric_name = cw_metric_name
@@ -53,6 +55,17 @@ class _Restore(threading.Thread):
         try:
 
             s3 = self._session.resource('s3')
+
+            if (self.target_profile):
+                if (os.path.exists("/root/.aws")):
+                    logger.info("/root/.aws already exists")
+                else:
+                    os.makedirs("/root/.aws")
+
+                awsconfig = open("/root/.aws/config", "w")
+                awstext = f"[profile target_account]\ncredential_source=EcsContainer\nrole_arn={self.target_profile}"
+                awsconfig.write(awstext)
+                awsconfig.close()
 
         except Exception as exc:
             logger.exception("")
@@ -108,6 +121,15 @@ class _Restore(threading.Thread):
                     s3_dst = self.dst_session.resource('s3')
 
                     logger.info("copy with assume role of dst_bucket")
+                    dst_obj = s3_dst.Object(self.dst_bucket, key)
+                elif(self.target_profile):
+                    logger.debug(
+                        f"target_profile:  {self.target_profile}")
+                    self.dst_session = boto3.session.Session(
+                        profile_name="target_account")
+                    s3_dst = self.dst_session.resource('s3')
+
+                    logger.info("copy with target_profile")
                     dst_obj = s3_dst.Object(self.dst_bucket, key)
                 else:
                     logger.info("copy without assume role of dst_bucket")

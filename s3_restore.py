@@ -37,6 +37,7 @@ CPU_COUNT = mp.cpu_count()
 CW_DIMENSION_NAME = cmd_args.cloudwatch_dimension_name
 DST_BUCKET = cmd_args.destination_bucket
 DST_BUCKET_ROLE = cmd_args.dst_bucket_role
+TARGET_PROFILE = cmd_args.target_profile
 OBJECTS_COUNT = cmd_args.objects_count
 PROFILE = cmd_args.profile
 REGION = cmd_args.region
@@ -117,6 +118,7 @@ if __name__ == '__main__':
         SRC_BUCKET,
         DST_BUCKET,
         DST_BUCKET_ROLE,
+        TARGET_PROFILE,
         timeout=TIMEOUT,
         cw_dimension_name=CW_DIMENSION_NAME,
         profile_name=PROFILE,

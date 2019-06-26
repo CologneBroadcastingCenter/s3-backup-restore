@@ -3,7 +3,7 @@ from boto3.s3.transfer import TransferConfig
 
 
 class Config(object):
-    def __init__(self, src_bucket, dst_bucket, dst_bucket_role=None, access_key=None,
+    def __init__(self, src_bucket, dst_bucket, dst_bucket_role=None, target_profile=None, access_key=None,
                  secret_key=None, token=None, timeout=120, last_modified=48,
                  extra_args=None, cw_namespace='BackupRecovery',
                  cw_dimension_name='Dev', profile_name=None,
@@ -54,6 +54,7 @@ class Config(object):
         self.src_bucket = src_bucket
         self.dst_bucket = dst_bucket
         self.dst_bucket_role = dst_bucket_role
+        self.target_profile = target_profile
         self.timeout = timeout
         self.last_modified = last_modified
         self._extra_args = extra_args
