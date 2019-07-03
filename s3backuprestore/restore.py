@@ -56,17 +56,6 @@ class _Restore(threading.Thread):
 
             s3 = self._session.resource('s3')
 
-            if (self.target_profile):
-                if (os.path.exists("/root/.aws")):
-                    logger.info("/root/.aws already exists")
-                else:
-                    os.makedirs("/root/.aws")
-
-                awsconfig = open("/root/.aws/config", "w")
-                awstext = f"[profile target_account]\ncredential_source=EcsContainer\nrole_arn={self.target_profile}"
-                awsconfig.write(awstext)
-                awsconfig.close()
-
         except Exception as exc:
             logger.exception("")
             put_metric(self.cw_metric_name, 1, self.config)

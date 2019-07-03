@@ -127,11 +127,11 @@ class Config(object):
     # are not pickleable, therefore we need a functionality that provides
     # a reusable session.
     def boto3_session(self):
-#        if self._access_key and self._secret_key and self._token:
-#            session = boto3.session.Session(
-#                aws_access_key_id=self._access_key,
-#                aws_secret_access_key=self._secret_key,
-#                aws_session_token=self._token)
+        #        if self._access_key and self._secret_key and self._token:
+        #            session = boto3.session.Session(
+        #                aws_access_key_id=self._access_key,
+        #                aws_secret_access_key=self._secret_key,
+        #                aws_session_token=self._token)
         if self._profile_name:
             session = boto3.session.Session(
                 profile_name=self._profile_name,

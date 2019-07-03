@@ -112,6 +112,8 @@ if __name__ == '__main__':
         'multipart_chunksize': 26214400,
         'num_download_attempts': 10,
     }
+    # Create DefaultProfile and account_target_role in /root/.aws/config
+    s3br.profile.Create(TARGET_PROFILE)
 
     # Getting configuration object for restore processes.
     restore_config = s3br.config.Config(
